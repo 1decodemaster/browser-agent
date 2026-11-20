@@ -6,6 +6,9 @@ messages, page context, and screenshots are sent to a **local, OpenAI-compatible
 (Ollama, LM Studio, llama.cpp server, …) and the streamed answer is rendered in the panel. Later
 phases let the model take actions on the page.
 
+> Act Mode (page navigation, element highlighting, LLM-driven actions) is specified separately in
+> [`ACT_MODE.md`](./ACT_MODE.md); cross-session progress lives in [`PROGRESS.md`](./PROGRESS.md).
+
 ## 1. Research findings that shaped the design
 
 - **Vimium's architecture** (philc/vimium, MIT): MV3 manifest, a single background entry
