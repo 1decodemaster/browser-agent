@@ -181,9 +181,141 @@
   color: #e8eaed;
   padding: 8px 10px;
   border-radius: 10px 10px 10px 2px;
-  white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ba-msg-assistant p,
+.ba-msg-reasoning p {
+  margin: 0 0 6px;
+}
+
+.ba-msg-assistant p:last-child,
+.ba-msg-reasoning p:last-child {
+  margin-bottom: 0;
+}
+
+.ba-msg-assistant h1,
+.ba-msg-assistant h2,
+.ba-msg-assistant h3,
+.ba-msg-assistant h4,
+.ba-msg-assistant h5,
+.ba-msg-assistant h6,
+.ba-msg-reasoning h1,
+.ba-msg-reasoning h2,
+.ba-msg-reasoning h3,
+.ba-msg-reasoning h4,
+.ba-msg-reasoning h5,
+.ba-msg-reasoning h6 {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ba-msg-assistant h1,
+.ba-msg-reasoning h1 {
+  font-size: 16px;
+}
+
+.ba-msg-assistant h2,
+.ba-msg-reasoning h2 {
+  font-size: 15px;
+}
+
+.ba-msg-assistant h3,
+.ba-msg-reasoning h3 {
+  font-size: 14px;
+}
+
+.ba-msg-assistant h4,
+.ba-msg-assistant h5,
+.ba-msg-assistant h6,
+.ba-msg-reasoning h4,
+.ba-msg-reasoning h5,
+.ba-msg-reasoning h6 {
+  font-size: 13px;
+}
+
+.ba-msg-assistant h1:first-child,
+.ba-msg-assistant h2:first-child,
+.ba-msg-assistant h3:first-child,
+.ba-msg-reasoning h1:first-child,
+.ba-msg-reasoning h2:first-child,
+.ba-msg-reasoning h3:first-child {
+  margin-top: 0;
+}
+
+.ba-msg-assistant ul,
+.ba-msg-assistant ol,
+.ba-msg-reasoning ul,
+.ba-msg-reasoning ol {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.ba-msg-assistant li,
+.ba-msg-reasoning li {
+  margin: 2px 0;
+}
+
+.ba-msg-assistant code,
+.ba-msg-reasoning code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: #0d0f13;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.ba-msg-assistant pre,
+.ba-msg-reasoning pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: #0d0f13;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.ba-msg-assistant pre code,
+.ba-msg-reasoning pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.ba-msg-assistant a,
+.ba-msg-reasoning a {
+  color: #6cb2ff;
+}
+
+.ba-msg-assistant blockquote,
+.ba-msg-reasoning blockquote {
+  margin: 6px 0;
+  padding-left: 8px;
+  border-left: 3px solid #2a2f3a;
+  color: #9aa0a6;
+}
+
+.ba-msg-assistant hr,
+.ba-msg-reasoning hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 8px 0;
+}
+
+.ba-msg-assistant table,
+.ba-msg-reasoning table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+
+.ba-msg-assistant th,
+.ba-msg-assistant td,
+.ba-msg-reasoning th,
+.ba-msg-reasoning td {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 3px 6px;
+  font-size: 12px;
 }
 
 .ba-msg-reasoning {
@@ -195,8 +327,8 @@
   font-size: 11.5px;
   padding: 6px 9px;
   border-radius: 10px 10px 10px 2px;
-  white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .ba-chips {

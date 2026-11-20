@@ -1,6 +1,6 @@
 {
   "name": "browser-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Contextual LLM browsing companion - talk to a local LLM about the page you are on.",
   "type": "module",
   "engines": {
@@ -19,5 +19,9 @@
   "devDependencies": {
     "typescript": "^5.7.2",
     "wxt": "^0.21.5"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.18",
+    "marked": "^18.2.1"
   }
 }

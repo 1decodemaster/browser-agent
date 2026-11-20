@@ -2,6 +2,7 @@ import { rpc } from '@/shared/rpc';
 import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/types';
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageHtml } from './dom-context';
+import { renderMarkdown } from './markdown';
 
 const HOST_ID = 'browser-agent-root';
 const UI_KEY = '__ba_ui';
@@ -163,6 +164,13 @@ export function mountUi(css: string): void {
   });
 
   onChatMessage(route);
+  log.addEventListener('click', (event) => {
+    const anchor = (event.target as HTMLElement | null)?.closest?.('a');
+    if (!anchor) return;
+    event.preventDefault();
+    const href = anchor.getAttribute('href');
+    if (href) window.open(href, '_blank', 'noopener');
+  });
   void loadHistory();
 
   const saved = loadUi();
@@ -247,7 +255,7 @@ export function mountUi(css: string): void {
             pendingAssistant = { bubble: addAssistantMessage(''), text: '' };
           }
           pendingAssistant.text += message.text;
-          pendingAssistant.bubble.textContent = pendingAssistant.text;
+          pendingAssistant.bubble.innerHTML = renderMarkdown(pendingAssistant.text);
         }
         scrollLog();
         break;
@@ -274,7 +282,7 @@ export function mountUi(css: string): void {
 
   function finalizeAssistant(text: string, stopped: boolean): void {
     if (text) {
-      if (pendingAssistant) pendingAssistant.bubble.textContent = text;
+      if (pendingAssistant) pendingAssistant.bubble.innerHTML = renderMarkdown(text);
       else addAssistantMessage(text);
       if (stopped) addNote('(stopped)');
     } else {
@@ -290,7 +298,7 @@ export function mountUi(css: string): void {
       pendingReasoning = { bubble: addReasoningBubble(''), text: '' };
     }
     pendingReasoning.text += text;
-    pendingReasoning.bubble.textContent = capReasoning(pendingReasoning.text);
+    pendingReasoning.bubble.innerHTML = renderMarkdown(capReasoning(pendingReasoning.text));
   }
 
   function collapseReasoning(): void {
@@ -386,7 +394,7 @@ export function mountUi(css: string): void {
     removeHint();
     const bubble = document.createElement('div');
     bubble.className = 'ba-msg-assistant';
-    bubble.textContent = text;
+    bubble.innerHTML = renderMarkdown(text);
     handles!.log.append(bubble);
     scrollLog();
     return bubble;
@@ -396,7 +404,7 @@ export function mountUi(css: string): void {
     removeHint();
     const bubble = document.createElement('div');
     bubble.className = 'ba-msg-reasoning';
-    bubble.textContent = text;
+    bubble.innerHTML = renderMarkdown(text);
     handles!.log.append(bubble);
     scrollLog();
     return bubble;
