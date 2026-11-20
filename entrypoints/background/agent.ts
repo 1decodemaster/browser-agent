@@ -407,5 +407,5 @@ async function saveState(tabId: number, state: AgentState): Promise<void> {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolvePromise) => window.setTimeout(resolvePromise, ms));
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }

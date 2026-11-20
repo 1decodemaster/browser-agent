@@ -1,6 +1,6 @@
 {
   "name": "browser-agent",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Contextual LLM browsing companion - talk to a local LLM about the page you are on.",
   "type": "module",
   "engines": {

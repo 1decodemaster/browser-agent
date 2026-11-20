@@ -6,7 +6,12 @@
 
 ## Current status
 
-- **Extension version:** 0.8.2 (agent persistence + keepalive + debug tooling)
+- **Extension version:** 0.8.3 (fix: SW has no `window` — keepalive/timers crashed agent start)
+- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input)
+- v0.8.3: replaced `window.setInterval/clearInterval/setTimeout` with bare globals in background
+  context (keepalive.ts, agent.ts delay()) — `window` is undefined in MV3 service workers; the
+  crash killed runLoop before the first LLM call (v0.8.2 regression).
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
 - v0.8.2 fixes from real-world agent testing (Wikipedia hops, flight sites):
