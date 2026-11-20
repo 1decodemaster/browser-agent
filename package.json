@@ -1,0 +1,23 @@
+{
+  "name": "browser-agent",
+  "version": "0.3.0",
+  "description": "Contextual LLM browsing companion - talk to a local LLM about the page you are on.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "wxt": "^0.21.5"
+  }
+}

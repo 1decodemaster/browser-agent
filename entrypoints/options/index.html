@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser Agent - Options</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #f6f7f9;
+        color: #1c1e21;
+        display: flex;
+        justify-content: center;
+        padding: 40px 16px;
+      }
+      main {
+        width: 100%;
+        max-width: 520px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        margin: 0 0 24px;
+        color: #57606a;
+        font-size: 14px;
+      }
+      form {
+        background: #fff;
+        border: 1px solid #d8dee4;
+        border-radius: 10px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      input {
+        font: inherit;
+        font-weight: 400;
+        padding: 8px 10px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+      }
+      input:focus {
+        outline: 2px solid #4f8cff;
+        border-color: #4f8cff;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+      .note {
+        margin: 0;
+        font-size: 12px;
+        color: #57606a;
+      }
+      .note code {
+        background: #eef1f4;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+      button {
+        font: inherit;
+        font-size: 13px;
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid #d0d7de;
+        background: #f6f7f9;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #eef1f4;
+      }
+      button[type="submit"] {
+        background: #4f8cff;
+        border-color: #4f8cff;
+        color: #fff;
+      }
+      button[type="submit"]:hover {
+        background: #3f7bef;
+      }
+      .status {
+        margin-top: 14px;
+        font-size: 13px;
+        min-height: 18px;
+        white-space: pre-wrap;
+      }
+      .status.ok {
+        color: #1a7f37;
+      }
+      .status.err {
+        color: #cf222e;
+      }
+      .status.info {
+        color: #57606a;
+      }
+      details {
+        margin-top: 18px;
+        font-size: 13px;
+        color: #57606a;
+      }
+      details code {
+        background: #eef1f4;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      details ul {
+        padding-left: 18px;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Browser Agent</h1>
+      <p class="sub">Connect the panel to a local, OpenAI-compatible LLM endpoint.</p>
+      <form id="form">
+        <label>
+          Endpoint URL
+          <input id="endpointUrl" type="url" required placeholder="http://localhost:11434" />
+        </label>
+        <label>
+          Model
+          <input id="model" type="text" required placeholder="llama3.2" />
+        </label>
+        <label>
+          API key (optional)
+          <input id="apiKey" type="password" placeholder="Leave empty for local servers" />
+        </label>
+        <p class="note">Base URL of an OpenAI-compatible server - with or without a trailing <code>/v1</code>.</p>
+        <div class="row">
+          <button type="submit">Save</button>
+          <button type="button" id="test">Test connection</button>
+        </div>
+      </form>
+      <div id="status" class="status info"></div>
+      <details>
+        <summary>Connection troubleshooting</summary>
+        <ul>
+          <li>
+            Ollama: start it with
+            <code>OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve</code>
+            so it accepts the extension's origin.
+          </li>
+          <li>LM Studio: enable <em>CORS</em> in the local server settings.</li>
+          <li>The test calls <code>GET /v1/models</code> (OpenAI-compatible) on the endpoint.</li>
+        </ul>
+      </details>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
