@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import { onRpc, type RpcSender } from '@/shared/rpc';
-import { getHistory, watchChatPorts } from './chat';
+import { clearHistory, getHistory, watchChatPorts } from './chat';
 
 export default defineBackground(() => {
   watchChatPorts();
@@ -9,6 +9,9 @@ export default defineBackground(() => {
     switch (request.kind) {
       case 'chat:history':
         return getHistory(requireTab(sender));
+      case 'chat:clear':
+        await clearHistory(requireTab(sender));
+        return true;
       case 'screenshot:capture':
         return { dataUrl: await captureScreenshot(requireTab(sender)) };
       case 'panel:toggle':

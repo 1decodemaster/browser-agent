@@ -6,7 +6,7 @@
 
 ## Current status
 
-- **Extension version:** 0.5.0 (base + Act Mode A1)
+- **Extension version:** 0.5.1 (base + Act Mode A1 + chat clear/export)
 - **Act Mode phase:** **A1 complete** — next: **A2** (executor + declarative JSON schema)
 - Resume A2 by reading ACT_MODE.md §4 + the A2 file notes below.
 
@@ -19,6 +19,7 @@
 - [x] Reasoning-model stream rendering (v0.2.3)
 - [x] Auto-hide pill + snap-to-side resizable sidebar (v0.3.0)
 - [x] Markdown rendering (marked + DOMPurify) (v0.4.0)
+- [x] Chat clear + Markdown export (v0.5.1)
 - [x] GitHub repo: https://github.com/1decodemaster/browser-agent (private)
 
 ## Act Mode phases

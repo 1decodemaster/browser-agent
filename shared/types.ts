@@ -16,6 +16,7 @@ export interface ChatMessage {
 
 export type RpcRequest =
   | { kind: 'chat:history' }
+  | { kind: 'chat:clear' }
   | { kind: 'screenshot:capture' }
   | { kind: 'panel:toggle' };
 

@@ -51,6 +51,12 @@ const SPARKLE_SVG =
 const DOCK_SVG =
   '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="2.5" width="5.5" height="11" rx="1.5" fill="currentColor"/></svg>';
 
+const TRASH_SVG =
+  '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.5h3V4M4.5 4l.7 9.5h5.6L11.5 4M6.7 6.5v4.5M9.3 6.5v4.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+const DOWNLOAD_SVG =
+  '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
 export function mountUi(css: string): void {
   if (document.getElementById(HOST_ID) != null) return;
 
@@ -96,15 +102,14 @@ export function mountUi(css: string): void {
   close.textContent = '×';
   const actions = document.createElement('div');
   actions.className = 'ba-header-actions';
-  actions.append(actBtn, dock, close);
+  const clearBtn = iconButton(TRASH_SVG, 'Clear chat history', () => void clearChat());
+  const exportBtn = iconButton(DOWNLOAD_SVG, 'Export chat as Markdown', () => void exportChat());
+  actions.append(actBtn, clearBtn, exportBtn, dock, close);
   header.append(title, actions);
 
   const log = document.createElement('div');
   log.className = 'ba-log';
-  const hint = document.createElement('div');
-  hint.className = 'ba-hint';
-  hint.textContent =
-    'Ask about this page. Use the embed buttons to attach page HTML or a screenshot to your next message.';
+  const hint = makeHint();
   log.append(hint);
 
   const chips = document.createElement('div');
@@ -460,6 +465,104 @@ export function prefillInput(text: string): void {
   handles.input.style.height = `${Math.min(handles.input.scrollHeight, 96)}px`;
   if (handles.panel.classList.contains('ba-hidden')) togglePanel();
   handles.input.focus();
+}
+
+function makeHint(): HTMLElement {
+  const hint = document.createElement('div');
+  hint.className = 'ba-hint';
+  hint.textContent =
+    'Ask about this page. Embed buttons attach HTML/screenshot to your next message. Act mode pins elements; commands like "click 12" or "type "x" into 17" run locally.';
+  return hint;
+}
+
+function iconButton(svg: string, title: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.className = 'ba-icon-btn';
+  button.type = 'button';
+  button.title = title;
+  button.innerHTML = svg;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+async function clearChat(): Promise<void> {
+  try {
+    await rpc<boolean>({ kind: 'chat:clear' });
+  } catch {
+    return;
+  }
+  if (!handles) return;
+  handles.log.replaceChildren();
+  const hint = makeHint();
+  handles.log.append(hint);
+  handles.hint = hint;
+}
+
+async function exportChat(): Promise<void> {
+  if (!handles) return;
+  let messages: ChatMessage[];
+  try {
+    messages = await rpc<ChatMessage[]>({ kind: 'chat:history' });
+  } catch (error) {
+    addNotePublic(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (messages.length === 0) {
+    addNotePublic('Nothing to export yet.');
+    return;
+  }
+  const markdown = buildTranscript(messages);
+  downloadText(`browser-agent-chat-${timestamp()}.md`, markdown);
+  addNotePublic(`Exported ${messages.length} message(s) as Markdown.`);
+}
+
+function addNotePublic(text: string): void {
+  if (!handles) return;
+  const note = document.createElement('div');
+  note.className = 'ba-note';
+  note.textContent = text;
+  handles.log.append(note);
+  handles.log.scrollTop = handles.log.scrollHeight;
+}
+
+function buildTranscript(messages: ChatMessage[]): string {
+  const lines: string[] = [
+    '# Browser Agent chat',
+    '',
+    `- Page: ${document.title} (${location.href})`,
+    `- Exported: ${new Date().toISOString()}`,
+    '',
+  ];
+  for (const message of messages) {
+    lines.push(`## ${message.role === 'user' ? 'User' : 'Assistant'}`, '');
+    lines.push(message.text || '_(no text)_');
+    if (message.html) {
+      lines.push('', `_(HTML context attached: ${(message.html.length / 1024).toFixed(1)} kB)_`);
+    }
+    if (message.images?.length) {
+      lines.push('', '_(Screenshot attached)_');
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function downloadText(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function timestamp(): string {
+  const now = new Date();
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
 }
 
 function scheduleHide(delay = 1200): void {

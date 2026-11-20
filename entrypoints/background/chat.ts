@@ -24,6 +24,10 @@ export async function getHistory(tabId: number): Promise<ChatMessage[]> {
   return (await storage.getItem<ChatMessage[]>(chatKey(tabId))) ?? [];
 }
 
+export async function clearHistory(tabId: number): Promise<void> {
+  await storage.removeItem(chatKey(tabId));
+}
+
 async function saveHistory(tabId: number, messages: ChatMessage[]): Promise<void> {
   await storage.setItem(chatKey(tabId), messages);
 }
