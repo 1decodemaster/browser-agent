@@ -3,6 +3,7 @@ import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/type
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageHtml } from './dom-context';
 import { renderMarkdown } from './markdown';
+import { isActMode, onActModeChange, setActMode } from './act/act';
 
 const HOST_ID = 'browser-agent-root';
 const UI_KEY = '__ba_ui';
@@ -78,6 +79,11 @@ export function mountUi(css: string): void {
   const title = document.createElement('span');
   title.className = 'ba-title';
   title.textContent = 'Browser Agent';
+  const actBtn = document.createElement('button');
+  actBtn.className = 'ba-icon-btn ba-act-btn';
+  actBtn.type = 'button';
+  actBtn.title = 'Act mode: highlight and interact with page elements';
+  actBtn.textContent = 'Act';
   const dock = document.createElement('button');
   dock.className = 'ba-icon-btn ba-dock';
   dock.type = 'button';
@@ -90,7 +96,7 @@ export function mountUi(css: string): void {
   close.textContent = '×';
   const actions = document.createElement('div');
   actions.className = 'ba-header-actions';
-  actions.append(dock, close);
+  actions.append(actBtn, dock, close);
   header.append(title, actions);
 
   const log = document.createElement('div');
@@ -146,6 +152,8 @@ export function mountUi(css: string): void {
   pill.addEventListener('click', togglePanel);
   pill.addEventListener('mouseenter', revealPill);
   pill.addEventListener('mouseleave', () => scheduleHide());
+  actBtn.addEventListener('click', () => setActMode(!isActMode()));
+  onActModeChange((modeActive) => actBtn.classList.toggle('ba-active', modeActive));
   dock.addEventListener('click', () => setSnapped(!snapped));
   close.addEventListener('click', closePanel);
   send.addEventListener('click', onSendClick);
@@ -158,7 +166,7 @@ export function mountUi(css: string): void {
   });
   resizer.addEventListener('pointerdown', startResize);
   document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || isActMode()) return;
     if (snapped) setSnapped(false);
     else if (!panel.classList.contains('ba-hidden')) togglePanel();
   });
@@ -443,6 +451,15 @@ export function togglePanel(): void {
   } else {
     scheduleHide();
   }
+}
+
+export function prefillInput(text: string): void {
+  if (!handles) return;
+  handles.input.value = text;
+  handles.input.style.height = 'auto';
+  handles.input.style.height = `${Math.min(handles.input.scrollHeight, 96)}px`;
+  if (handles.panel.classList.contains('ba-hidden')) togglePanel();
+  handles.input.focus();
 }
 
 function scheduleHide(delay = 1200): void {

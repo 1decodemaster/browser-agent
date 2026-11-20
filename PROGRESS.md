@@ -6,9 +6,9 @@
 
 ## Current status
 
-- **Extension version:** 0.4.0 (base) — chat, embeds, snap sidebar, markdown rendering
-- **Act Mode phase:** **A1 in progress** (design agreed, implementation started this session)
-- **Next up:** finish A1, then A2
+- **Extension version:** 0.5.0 (base + Act Mode A1)
+- **Act Mode phase:** **A1 complete** — next: **A2** (executor + declarative JSON schema)
+- Resume A2 by reading ACT_MODE.md §4 + the A2 file notes below.
 
 ## Base extension milestones (done)
 
@@ -23,11 +23,15 @@
 
 ## Act Mode phases
 
-- [ ] **A1 — Indexer + Spotlight + action bar** ← current
-  - indexer.ts (element table, accessible names, serialize), spotlight.ts (overlay: highlight,
-    label chip, action bar, fill bar, banner), executor.ts (click/focus/setValue/copy), act.ts
-    (mode toggle, hover, pin, wiring), panel Act toggle + Escape coordination, "Ask about this"
-    prefills chat input
+- [x] **A1 — Indexer + Spotlight + action bar** (v0.5.0)
+  - `entrypoints/content/act/`: indexer.ts (element table, accessible names, `serializeTable()`
+    ready for LLM prompts), spotlight.ts (overlay: highlight boxes w/ intent colors + pulse,
+    label chip, action bar, fill bar, banner), executor.ts (click/focus/React-safe setValue/copy
+    with execCommand fallback), act.ts (mode toggle via panel "Act" button, hover highlight via
+    rAF-throttled elementFromPoint, click-capture pin, per-kind action bar, MutationObserver
+    dirty-flag rebuild, Esc = unpin then exit)
+  - "Ask about this" prefills chat input via `prefillInput` export; panel Escape handler disabled
+    while Act mode is on
 - [ ] **A2 — Executor + declarative schema**: JSON action grammar (click/type/scroll/extract/
   navigate/wait/done), tolerant parse, confirmations for destructive ops, manual drive from chat
 - [ ] **A3 — Agent loop**: background orchestrator, Observe→Think→Act, autonomy levels (Supervise/
