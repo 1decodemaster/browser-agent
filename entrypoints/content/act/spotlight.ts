@@ -12,7 +12,7 @@ export interface Spotlight {
   highlight(rect: DOMRect, color: HighlightColor, pulsing?: boolean): void;
   hideHighlight(): void;
   setLabel(text: string | null, rect?: DOMRect): void;
-  setBanner(text: string | null): void;
+  setBanner(text: string | null, onClick?: () => void): void;
   showActionBar(rect: DOMRect, actions: ActionItem[]): void;
   showFillBar(rect: DOMRect, onSubmit: (value: string) => void, onCancel: () => void): void;
   confirmBar(rect: DOMRect, text: string): Promise<boolean>;
@@ -58,11 +58,15 @@ export function mountSpotlight(css: string): Spotlight {
         label.style.display = 'none';
         bar.replaceChildren();
         banner.textContent = '';
+        banner.onclick = null;
+        banner.classList.remove('baa-clickable');
       }
     },
 
-    setBanner(text) {
+    setBanner(text, onClick) {
       banner.textContent = text ?? '';
+      banner.onclick = onClick ?? null;
+      banner.classList.toggle('baa-clickable', Boolean(onClick));
     },
 
     highlight(rect, color, pulsing = false) {

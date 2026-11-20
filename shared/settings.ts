@@ -6,6 +6,10 @@ export const DEFAULT_SETTINGS: Settings = {
   model: 'llama3.2',
   apiKey: '',
   sites: {},
+  actEndpointUrl: '',
+  actModel: '',
+  actReasoningEffort: '',
+  actExtraInstructions: '',
 };
 
 export const settingsItem = storage.defineItem<Settings>('local:settings', {

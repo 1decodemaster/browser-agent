@@ -33,6 +33,12 @@ async function saveHistory(tabId: number, messages: ChatMessage[]): Promise<void
   await storage.setItem(chatKey(tabId), messages);
 }
 
+const tabPorts = new Map<number, Port>();
+
+export function getTabPort(tabId: number): Port | undefined {
+  return tabPorts.get(tabId);
+}
+
 export function watchChatPorts(): void {
   browser.runtime.onConnect.addListener((port) => {
     if (port.name !== 'chat') return;
@@ -41,6 +47,7 @@ export function watchChatPorts(): void {
       port.disconnect();
       return;
     }
+    tabPorts.set(tabId, port);
     const controllers = new Map<string, AbortController>();
     port.onMessage.addListener((raw: unknown) => {
       const message = raw as ChatPortMessage;
@@ -49,12 +56,13 @@ export function watchChatPorts(): void {
       } else if (message.type === 'chat.stop') {
         controllers.get(message.requestId)?.abort();
       } else if (message.type === 'agent.start') {
-        void startAgent(port, tabId, message.goal, message.autonomy);
+        void startAgent(tabId, message.goal, message.askFirst);
       } else if (message.type === 'agent.stop') {
         stopAgent(tabId);
       }
     });
     port.onDisconnect.addListener(() => {
+      if (tabPorts.get(tabId) === port) tabPorts.delete(tabId);
       for (const controller of controllers.values()) controller.abort();
       controllers.clear();
     });

@@ -5,6 +5,10 @@ import type { Settings } from '@/shared/types';
 const endpointInput = document.getElementById('endpointUrl') as HTMLInputElement;
 const modelInput = document.getElementById('model') as HTMLInputElement;
 const apiKeyInput = document.getElementById('apiKey') as HTMLInputElement;
+const actEndpointInput = document.getElementById('actEndpointUrl') as HTMLInputElement;
+const actModelInput = document.getElementById('actModel') as HTMLInputElement;
+const actEffortSelect = document.getElementById('actReasoningEffort') as HTMLSelectElement;
+const actExtraInput = document.getElementById('actExtraInstructions') as HTMLTextAreaElement;
 const statusEl = document.getElementById('status') as HTMLElement;
 const testButton = document.getElementById('test') as HTMLButtonElement;
 const form = document.getElementById('form') as HTMLFormElement;
@@ -16,6 +20,12 @@ form.addEventListener('submit', (event) => {
   void save().then(() => setStatus('Saved.', 'ok'));
 });
 
+const actForm = document.getElementById('actForm') as HTMLFormElement;
+actForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void save().then(() => setStatus('Saved.', 'ok'));
+});
+
 testButton.addEventListener('click', () => void testConnection());
 
 async function load(): Promise<void> {
@@ -23,6 +33,10 @@ async function load(): Promise<void> {
   endpointInput.value = settings.endpointUrl;
   modelInput.value = settings.model;
   apiKeyInput.value = settings.apiKey;
+  actEndpointInput.value = settings.actEndpointUrl ?? '';
+  actModelInput.value = settings.actModel ?? '';
+  actEffortSelect.value = settings.actReasoningEffort ?? '';
+  actExtraInput.value = settings.actExtraInstructions ?? '';
 }
 
 async function collect(): Promise<Settings> {
@@ -33,6 +47,10 @@ async function collect(): Promise<Settings> {
     model: modelInput.value.trim(),
     apiKey: apiKeyInput.value.trim(),
     sites: stored.sites,
+    actEndpointUrl: actEndpointInput.value.trim(),
+    actModel: actModelInput.value.trim(),
+    actReasoningEffort: actEffortSelect.value,
+    actExtraInstructions: actExtraInput.value,
   };
 }
 

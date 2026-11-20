@@ -6,16 +6,19 @@
 
 ## Current status
 
-- **Extension version:** 0.7.1 (base + Act Mode A1–A3 + chat clear/export)
-- **Act Mode phase:** **A3 complete** — next: **A4** (multi-page goals, vision grounding,
-  optional chrome.debugger trusted input)
-- User-facing rules: **Send = chat** (model cannot act; system prompt redirects action requests to
-  the Agent button), **Agent = autonomous goal run**. Agent button is disabled while a chat reply
-  is streaming and gives feedback when the goal is empty.
-- A4 notes: navigation already works through the loop (observe retry = readiness detection);
-  remaining: screenshot/vision grounding in the observe step (`act:observe` can return a
-  `screenshot` field when requested), cross-page goal persistence is done via bg state, trusted
-  input is a Chrome-only opt-in.
+- **Extension version:** 0.8.0 (UX redesign: Act-subsumes-Agent; port registry; per-mode LLM config)
+- **Act Mode phase:** A1–A3 done, redesigned in v0.8.0 — next: **A4** (vision grounding,
+  Wikipedia-hop end-to-end test, optional chrome.debugger trusted input)
+- v0.8.0 redesign highlights:
+  - **Composer is just [input][Send]** — Agent button + autonomy select removed. Send behavior:
+    Act OFF → chat; Act ON → agent goal; `click 12`-style commands always local; Send reads
+    **Stop** (red) while a chat stream or agent run is active and routes the click accordingly.
+  - **Ask-first toggle lives in the Act banner on the page** (click it): ON = confirm every
+    click/fill, OFF = confirm only destructive/submit (hard rail).
+  - **Port registry** (`tabPorts` in background/chat.ts): all chat/agent notifications route via
+    `getTabPort(tabId)` — fixes the dead-port "greyed forever" bug after navigations.
+  - **Per-mode LLM config** in Options: act endpoint/model (blank = reuse chat), optional
+    `reasoning_effort` (only sent when set), extra agent instructions appended to AGENT_SYSTEM.
 
 ## Base extension milestones (done)
 

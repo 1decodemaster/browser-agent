@@ -5,9 +5,11 @@ import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/s
 
 const ACT_HOST_ID = 'browser-agent-act-root';
 const PANEL_HOST_ID = 'browser-agent-root';
+const ACT_UI_KEY = '__ba_act';
 
 let spotlight: Spotlight | null = null;
 let active = false;
+let askFirst = false;
 let table: ElementTable | null = null;
 let tableDirty = false;
 let pinned: { element: HTMLElement; id: number } | null = null;
@@ -22,6 +24,17 @@ const changeCallbacks: Array<(active: boolean) => void> = [];
 export function mountAct(css: string): void {
   if (document.getElementById(ACT_HOST_ID) != null) return;
   spotlight = mountSpotlight(css);
+  loadActUi();
+}
+
+export function isAskFirst(): boolean {
+  return askFirst;
+}
+
+export function setAskFirst(value: boolean): void {
+  askFirst = value;
+  persistActUi();
+  updateBanner();
 }
 
 export function configureAct(options: { onAsk: (text: string) => void }): void {
@@ -48,7 +61,7 @@ export function setActMode(on: boolean): void {
     spotlight.setActive(true);
     spotlight.hideHighlight();
     spotlight.hideBar();
-    spotlight.setBanner('Act mode — click an element to pin it · Esc to exit');
+    updateBanner();
     savedBodyCursor = document.body.style.cursor;
     document.body.style.cursor = 'crosshair';
     startListeners();
@@ -250,6 +263,33 @@ function delay(ms: number): Promise<void> {
 function refreshTable(): void {
   table = buildElementTable();
   tableDirty = false;
+}
+
+function updateBanner(): void {
+  if (!spotlight || !active) return;
+  spotlight.setBanner(
+    `Act — click to pin · Esc to exit · Ask first: ${askFirst ? 'ON' : 'OFF'}`,
+    () => setAskFirst(!askFirst),
+  );
+}
+
+function persistActUi(): void {
+  try {
+    window.sessionStorage.setItem(ACT_UI_KEY, JSON.stringify({ askFirst }));
+  } catch {
+    return;
+  }
+}
+
+function loadActUi(): void {
+  try {
+    const raw = window.sessionStorage.getItem(ACT_UI_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { askFirst?: unknown };
+    askFirst = parsed.askFirst === true;
+  } catch {
+    return;
+  }
 }
 
 function ensureFreshTable(): ElementTable {

@@ -149,4 +149,14 @@
   padding: 4px 12px;
   border-radius: 999px;
   white-space: nowrap;
+  pointer-events: auto;
+}
+
+.baa-banner.baa-clickable {
+  cursor: pointer;
+}
+
+.baa-banner.baa-clickable:hover {
+  color: #e8eaed;
+  border-color: rgba(79, 140, 255, 0.5);
 }

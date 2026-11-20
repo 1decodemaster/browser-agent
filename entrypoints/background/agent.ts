@@ -1,4 +1,3 @@
-import { browser } from 'wxt/browser';
 import { rpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
@@ -6,13 +5,12 @@ import type {
   ActionObservation,
   ActionOp,
   AgentSummary,
-  Autonomy,
   ConfirmMode,
   ObserveResult,
   ScrollTarget,
 } from '@/shared/protocol';
-
-type Port = ReturnType<typeof browser.runtime.connect>;
+import type { ChatPortMessage } from '@/shared/types';
+import { getTabPort } from './chat';
 
 const agentKey = (tabId: number) => `session:agent:${tabId}` as const;
 const MAX_STEPS = 12;
@@ -20,7 +18,7 @@ const OBSERVE_TIMEOUT_MS = 15_000;
 
 interface AgentState {
   goal: string;
-  autonomy: Autonomy;
+  askFirst: boolean;
   step: number;
   status: 'idle' | 'running';
   narration: string[];
@@ -44,33 +42,27 @@ const AGENT_SYSTEM = [
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
   const state = await loadState(tabId);
   if (!state || !activeRuns.has(tabId)) {
-    return { status: 'idle', step: 0, goal: '', autonomy: 'normal', narration: [] };
+    return { status: 'idle', step: 0, goal: '', askFirst: false, narration: [] };
   }
   return {
     status: 'running',
     step: state.step,
     goal: state.goal,
-    autonomy: state.autonomy,
+    askFirst: state.askFirst,
     narration: state.narration,
   };
 }
 
-export async function startAgent(
-  port: Port,
-  tabId: number,
-  goal: string,
-  autonomy: Autonomy,
-): Promise<void> {
+export async function startAgent(tabId: number, goal: string, askFirst: boolean): Promise<void> {
   if (activeRuns.has(tabId)) {
-    port.postMessage({ type: 'agent.error', message: 'Agent is already running.' });
+    notify(tabId, { type: 'agent.error', message: 'Agent is already running.' });
     return;
   }
-  const state: AgentState = { goal, autonomy, step: 0, status: 'running', narration: [] };
+  const state: AgentState = { goal, askFirst, step: 0, status: 'running', narration: [] };
   await saveState(tabId, state);
   const run: RunHandle = { stop: false, abort: new AbortController() };
   activeRuns.set(tabId, run);
-  port.postMessage({ type: 'agent.started', goal, autonomy });
-  void runLoop(port, tabId, run).finally(() => activeRuns.delete(tabId));
+  void runLoop(tabId, run).finally(() => activeRuns.delete(tabId));
 }
 
 export function stopAgent(tabId: number): void {
@@ -84,7 +76,11 @@ export function removeAgentState(tabId: number): void {
   void storage.removeItem(agentKey(tabId));
 }
 
-async function runLoop(port: Port, tabId: number, run: RunHandle): Promise<void> {
+function notify(tabId: number, message: ChatPortMessage): void {
+  getTabPort(tabId)?.postMessage(message);
+}
+
+async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   const state = (await loadState(tabId))!;
   let summary: string | undefined;
   let error: string | undefined;
@@ -110,7 +106,9 @@ async function runLoop(port: Port, tabId: number, run: RunHandle): Promise<void>
           state,
           observation,
           run.abort.signal,
-          attempt > 0 ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.` : null,
+          attempt > 0
+            ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
+            : null,
         );
         try {
           parsed = parseActionResponse(raw);
@@ -127,10 +125,12 @@ async function runLoop(port: Port, tabId: number, run: RunHandle): Promise<void>
         break;
       }
 
-      const doneAction = parsed.actions.find((action): action is { op: 'done'; summary?: string } => action.op === 'done');
+      const doneAction = parsed.actions.find(
+        (action): action is { op: 'done'; summary?: string } => action.op === 'done',
+      );
       const executable = parsed.actions.filter((action) => action.op !== 'done');
       const observations = executable.length
-        ? await executeOnContent(tabId, executable, confirmMode(state.autonomy), run)
+        ? await executeOnContent(tabId, executable, confirmMode(state.askFirst), run)
         : [];
 
       const stepLines = [
@@ -140,7 +140,12 @@ async function runLoop(port: Port, tabId: number, run: RunHandle): Promise<void>
       state.narration.push(...stepLines);
       if (state.narration.length > 40) state.narration = state.narration.slice(-40);
       await saveState(tabId, state);
-      port.postMessage({ type: 'agent.step', step: state.step, thought: parsed.thought, observations });
+      notify(tabId, {
+        type: 'agent.step',
+        step: state.step,
+        thought: parsed.thought,
+        observations,
+      });
 
       if (run.stop) {
         summary = 'Stopped by user.';
@@ -164,15 +169,13 @@ async function runLoop(port: Port, tabId: number, run: RunHandle): Promise<void>
   } finally {
     state.status = 'idle';
     await saveState(tabId, state);
-    if (error) port.postMessage({ type: 'agent.error', message: error });
-    else port.postMessage({ type: 'agent.done', summary });
+    if (error) notify(tabId, { type: 'agent.error', message: error });
+    else notify(tabId, { type: 'agent.done', summary });
   }
 }
 
-function confirmMode(autonomy: Autonomy): ConfirmMode {
-  if (autonomy === 'supervise') return 'always';
-  if (autonomy === 'auto') return 'never';
-  return 'destructive';
+function confirmMode(askFirst: boolean): ConfirmMode {
+  return askFirst ? 'always' : 'destructive';
 }
 
 async function observeWithRetry(
@@ -220,10 +223,18 @@ async function completeOnce(
   feedback: string | null,
 ): Promise<string> {
   const settings = await getSettings();
-  if (!settings.endpointUrl) throw new Error('No endpoint configured - set it in the Options page.');
-  const base = normalizeEndpoint(settings.endpointUrl);
+  const endpoint = settings.actEndpointUrl?.trim() || settings.endpointUrl;
+  const model = settings.actModel?.trim() || settings.model;
+  if (!endpoint) throw new Error('No endpoint configured - set it in the Options page.');
+  const effort = settings.actReasoningEffort?.trim();
+
+  const base = normalizeEndpoint(endpoint);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+
+  const system = settings.actExtraInstructions?.trim()
+    ? `${AGENT_SYSTEM}\n\nAdditional instructions from the user:\n${settings.actExtraInstructions.trim()}`
+    : AGENT_SYSTEM;
 
   const transcript = state.narration.slice(-6).join('\n');
   const userContent = [
@@ -245,12 +256,13 @@ async function completeOnce(
     headers,
     signal,
     body: JSON.stringify({
-      model: settings.model,
+      model,
       messages: [
-        { role: 'system', content: AGENT_SYSTEM },
+        { role: 'system', content: system },
         { role: 'user', content: userContent },
       ],
       stream: false,
+      ...(effort ? { reasoning_effort: effort } : {}),
     }),
   });
   if (!response.ok) {
@@ -277,7 +289,9 @@ function parseActionResponse(raw: string): { thought: string; actions: ActionOp[
     actions?: unknown;
   };
   if (!Array.isArray(parsed.actions)) throw new Error('missing actions array');
-  const actions = parsed.actions.map(coerceAction).filter((action): action is ActionOp => action != null);
+  const actions = parsed.actions
+    .map(coerceAction)
+    .filter((action): action is ActionOp => action != null);
   if (!actions.length) throw new Error('no valid actions');
   return { thought: typeof parsed.thought === 'string' ? parsed.thought : '', actions };
 }

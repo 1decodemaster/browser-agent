@@ -62,6 +62,23 @@
         outline: 2px solid #4f8cff;
         border-color: #4f8cff;
       }
+      select,
+      textarea {
+        font: inherit;
+        font-weight: 400;
+        padding: 8px 10px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+      }
+      textarea {
+        resize: vertical;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 28px 0 4px;
+      }
       .row {
         display: flex;
         gap: 10px;
@@ -150,6 +167,35 @@
           <button type="submit">Save</button>
           <button type="button" id="test">Test connection</button>
         </div>
+      </form>
+      <h2>Act mode</h2>
+      <p class="sub">Optional overrides for the autonomous agent. Leave blank to reuse the chat settings.</p>
+      <form id="actForm">
+        <label>
+          Act endpoint URL
+          <input id="actEndpointUrl" type="url" placeholder="Same as chat endpoint" />
+        </label>
+        <label>
+          Act model
+          <input id="actModel" type="text" placeholder="Same as chat model" />
+        </label>
+        <label>
+          Reasoning effort
+          <select id="actReasoningEffort">
+            <option value="">Default (not sent)</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label>
+          Extra instructions for the agent
+          <textarea id="actExtraInstructions" rows="3" placeholder="Appended to the agent system prompt"></textarea>
+        </label>
+        <p class="note">
+          <code>reasoning_effort</code> is sent only when set; servers that don't support it may reject the request - if
+          act calls fail with HTTP 400, set it back to Default.
+        </p>
       </form>
       <div id="status" class="status info"></div>
       <details>

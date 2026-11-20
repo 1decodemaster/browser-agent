@@ -17,8 +17,6 @@ export interface ActionObservation {
   message?: string;
 }
 
-export type Autonomy = 'supervise' | 'normal' | 'auto';
-
 export type ConfirmMode = 'always' | 'destructive' | 'never';
 
 export interface ObserveResult {
@@ -31,6 +29,6 @@ export interface AgentSummary {
   status: 'idle' | 'running';
   step: number;
   goal: string;
-  autonomy: Autonomy;
+  askFirst: boolean;
   narration: string[];
 }

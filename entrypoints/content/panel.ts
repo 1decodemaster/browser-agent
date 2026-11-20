@@ -1,10 +1,10 @@
 import { rpc } from '@/shared/rpc';
 import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/types';
-import type { AgentSummary, Autonomy } from '@/shared/protocol';
+import type { AgentSummary } from '@/shared/protocol';
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageHtml } from './dom-context';
 import { renderMarkdown } from './markdown';
-import { isActMode, onActModeChange, setActMode, executeActions } from './act/act';
+import { isActMode, isAskFirst, onActModeChange, setActMode, setAskFirst, executeActions } from './act/act';
 import { COMMAND_HELP, parseCommand } from './act/commands';
 
 const HOST_ID = 'browser-agent-root';
@@ -29,8 +29,6 @@ interface Handles {
   hint: HTMLElement;
   embedButtons: HTMLButtonElement[];
   dock: HTMLButtonElement;
-  agentBtn: HTMLButtonElement;
-  autonomySelect: HTMLSelectElement;
 }
 
 interface PersistedUi {
@@ -128,25 +126,6 @@ export function mountUi(css: string): void {
 
   const inputRow = document.createElement('div');
   inputRow.className = 'ba-input-row';
-  const agentBtn = document.createElement('button');
-  agentBtn.className = 'ba-agent-btn';
-  agentBtn.type = 'button';
-  agentBtn.title = 'Run this message as an autonomous agent goal';
-  agentBtn.textContent = 'Agent';
-  const autonomySelect = document.createElement('select');
-  autonomySelect.className = 'ba-autonomy';
-  autonomySelect.title = 'Autonomy level: approve every action, auto with confirmations, or fully autonomous';
-  for (const [value, label] of [
-    ['supervise', 'Supervise'],
-    ['normal', 'Normal'],
-    ['auto', 'Auto'],
-  ] as Array<[Autonomy, string]>) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    autonomySelect.append(option);
-  }
-  autonomySelect.value = 'normal';
   const input = document.createElement('textarea');
   input.className = 'ba-input';
   input.placeholder = 'Ask about this page…';
@@ -155,7 +134,7 @@ export function mountUi(css: string): void {
   send.className = 'ba-send';
   send.type = 'button';
   send.textContent = 'Send';
-  inputRow.append(agentBtn, autonomySelect, input, send);
+  inputRow.append(input, send);
 
   const resizer = document.createElement('div');
   resizer.className = 'ba-resizer';
@@ -176,8 +155,6 @@ export function mountUi(css: string): void {
     hint,
     embedButtons: [embedHtmlButton, embedShotButton],
     dock,
-    agentBtn,
-    autonomySelect,
   };
 
   pill.addEventListener('click', togglePanel);
@@ -185,7 +162,6 @@ export function mountUi(css: string): void {
   pill.addEventListener('mouseleave', () => scheduleHide());
   actBtn.addEventListener('click', () => setActMode(!isActMode()));
   onActModeChange((modeActive) => actBtn.classList.toggle('ba-active', modeActive));
-  agentBtn.addEventListener('click', onAgentClick);
   dock.addEventListener('click', () => setSnapped(!snapped));
   close.addEventListener('click', closePanel);
   send.addEventListener('click', onSendClick);
@@ -243,15 +219,19 @@ export function mountUi(css: string): void {
   }
 
   function onSendClick(): void {
+    if (agentRunning) {
+      chatPost({ type: 'agent.stop' });
+      return;
+    }
     if (activeRequestId != null) {
       chatPost({ type: 'chat.stop', requestId: activeRequestId });
       return;
     }
-    sendMessage();
+    void sendMessage();
   }
 
   async function sendMessage(): Promise<void> {
-    if (!handles || agentRunning) return;
+    if (!handles || agentRunning || activeRequestId != null) return;
     const text = handles.input.value.trim();
 
     if (text.toLowerCase() === 'help') {
@@ -272,6 +252,16 @@ export function mountUi(css: string): void {
             : `${label} → failed — ${observation.message ?? 'unknown error'}`,
         );
       }
+      return;
+    }
+
+    if (isActMode()) {
+      agentRunning = true;
+      updateComposerState();
+      addNote(`Agent goal: ${text}`);
+      handles.input.value = '';
+      autosize();
+      chatPost({ type: 'agent.start', goal: text, askFirst: isAskFirst() });
       return;
     }
 
@@ -338,11 +328,6 @@ export function mountUi(css: string): void {
         addNote(`Error: ${message.message}`);
         setStreaming(false);
         activeRequestId = null;
-        break;
-      }
-      case 'agent.started': {
-        agentRunning = true;
-        updateComposerState();
         break;
       }
       case 'agent.step': {
@@ -412,41 +397,9 @@ export function mountUi(css: string): void {
     if (!handles) return;
     const chatBusy = activeRequestId != null;
     const busy = chatBusy || agentRunning;
-    handles.send.textContent = chatBusy ? 'Stop' : 'Send';
-    handles.send.disabled = agentRunning;
+    handles.send.textContent = busy ? 'Stop' : 'Send';
+    handles.send.classList.toggle('ba-stop', agentRunning);
     for (const button of handles.embedButtons) button.disabled = busy;
-    handles.agentBtn.textContent = agentRunning ? 'Stop' : 'Agent';
-    handles.agentBtn.classList.toggle('ba-running', agentRunning);
-    handles.agentBtn.disabled = chatBusy;
-    handles.agentBtn.title = chatBusy
-      ? 'Wait for the current chat reply to finish'
-      : 'Run this message as an autonomous agent goal (Send chats, Agent acts)';
-    handles.autonomySelect.disabled = busy;
-  }
-
-  function onAgentClick(): void {
-    if (!handles) return;
-    if (agentRunning) {
-      chatPost({ type: 'agent.stop' });
-      return;
-    }
-    if (activeRequestId != null) return;
-    const goal = handles.input.value.trim();
-    if (!goal) {
-      addNote('Type a goal first, then press Agent. (Send chats; Agent acts.)');
-      handles.input.focus();
-      return;
-    }
-    agentRunning = true;
-    updateComposerState();
-    addNote(`Agent goal: ${goal}`);
-    handles.input.value = '';
-    autosize();
-    chatPost({
-      type: 'agent.start',
-      goal,
-      autonomy: handles.autonomySelect.value as Autonomy,
-    });
   }
 
   async function restoreAgentState(): Promise<void> {
@@ -454,7 +407,7 @@ export function mountUi(css: string): void {
       const state = await rpc<AgentSummary>({ kind: 'agent:get' });
       if (state.status !== 'running' || !handles) return;
       agentRunning = true;
-      handles.autonomySelect.value = state.autonomy;
+      setAskFirst(state.askFirst);
       updateComposerState();
       addNote(`Agent running: "${state.goal}" (step ${state.step})`);
       for (const line of state.narration.slice(-10)) addNote(line);

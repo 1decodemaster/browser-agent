@@ -1,10 +1,14 @@
-import type { ActionObservation, ActionOp, Autonomy, ConfirmMode } from './protocol';
+import type { ActionObservation, ActionOp, ConfirmMode } from './protocol';
 
 export interface Settings {
   endpointUrl: string;
   model: string;
   apiKey: string;
   sites: Record<string, boolean>;
+  actEndpointUrl?: string;
+  actModel?: string;
+  actReasoningEffort?: string;
+  actExtraInstructions?: string;
 }
 
 export interface ChatMessage {
@@ -43,9 +47,8 @@ export type ChatPortMessage =
   | { type: 'chat.delta'; requestId: string; text: string; reasoning?: boolean }
   | { type: 'chat.done'; requestId: string; text: string; stopped?: boolean }
   | { type: 'chat.error'; requestId: string; message: string }
-  | { type: 'agent.start'; goal: string; autonomy: Autonomy }
+  | { type: 'agent.start'; goal: string; askFirst: boolean }
   | { type: 'agent.stop' }
-  | { type: 'agent.started'; goal: string; autonomy: Autonomy }
   | { type: 'agent.step'; step: number; thought: string; observations: ActionObservation[] }
   | { type: 'agent.done'; summary?: string }
   | { type: 'agent.error'; message: string };
