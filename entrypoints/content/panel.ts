@@ -418,6 +418,9 @@ export function mountUi(css: string): void {
     handles.agentBtn.textContent = agentRunning ? 'Stop' : 'Agent';
     handles.agentBtn.classList.toggle('ba-running', agentRunning);
     handles.agentBtn.disabled = chatBusy;
+    handles.agentBtn.title = chatBusy
+      ? 'Wait for the current chat reply to finish'
+      : 'Run this message as an autonomous agent goal (Send chats, Agent acts)';
     handles.autonomySelect.disabled = busy;
   }
 
@@ -427,8 +430,10 @@ export function mountUi(css: string): void {
       chatPost({ type: 'agent.stop' });
       return;
     }
+    if (activeRequestId != null) return;
     const goal = handles.input.value.trim();
     if (!goal) {
+      addNote('Type a goal first, then press Agent. (Send chats; Agent acts.)');
       handles.input.focus();
       return;
     }
@@ -599,7 +604,7 @@ function makeHint(): HTMLElement {
   const hint = document.createElement('div');
   hint.className = 'ba-hint';
   hint.textContent =
-    'Ask about this page. Embed buttons attach HTML/screenshot to your next message. Act mode pins elements; commands like "click 12" or "type "x" into 17" run locally.';
+    'Send chats about this page (embed HTML/screenshot for context). Agent runs your message as an autonomous goal. Local commands: "click 12", "type "x" into 17", "help".';
   return hint;
 }
 

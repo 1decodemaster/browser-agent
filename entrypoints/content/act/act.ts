@@ -174,7 +174,9 @@ async function runAction(
         return { ...base, ok: true, message: text.slice(0, 200) || '(empty)' };
       }
       case 'navigate': {
-        window.location.href = action.url;
+        window.setTimeout(() => {
+          window.location.href = action.url;
+        }, 50);
         return { ...base, ok: true, message: action.url };
       }
       case 'wait': {

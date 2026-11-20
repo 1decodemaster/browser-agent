@@ -6,9 +6,12 @@
 
 ## Current status
 
-- **Extension version:** 0.7.0 (base + Act Mode A1 + A2 + A3 + chat clear/export)
+- **Extension version:** 0.7.1 (base + Act Mode A1–A3 + chat clear/export)
 - **Act Mode phase:** **A3 complete** — next: **A4** (multi-page goals, vision grounding,
   optional chrome.debugger trusted input)
+- User-facing rules: **Send = chat** (model cannot act; system prompt redirects action requests to
+  the Agent button), **Agent = autonomous goal run**. Agent button is disabled while a chat reply
+  is streaming and gives feedback when the goal is empty.
 - A4 notes: navigation already works through the loop (observe retry = readiness detection);
   remaining: screenshot/vision grounding in the observe step (`act:observe` can return a
   `screenshot` field when requested), cross-page goal persistence is done via bg state, trusted
