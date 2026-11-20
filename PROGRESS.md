@@ -6,12 +6,13 @@
 
 ## Current status
 
-- **Extension version:** 0.6.0 (base + Act Mode A1 + A2 + chat clear/export)
-- **Act Mode phase:** **A2 complete** — next: **A3** (agent loop: background orchestrator,
-  Observe→Think→Act, autonomy levels, Stop, step narration, sweep highlights)
-- A3 entry points that already exist: `serializeTable()` (LLM-ready index), `executeActions()`
-  (executor w/ rails + confirm), spotlight sweep colors; missing: bg orchestration, LLM
-  action-parsing prompt, per-tab agent state, autonomy UI.
+- **Extension version:** 0.7.0 (base + Act Mode A1 + A2 + A3 + chat clear/export)
+- **Act Mode phase:** **A3 complete** — next: **A4** (multi-page goals, vision grounding,
+  optional chrome.debugger trusted input)
+- A4 notes: navigation already works through the loop (observe retry = readiness detection);
+  remaining: screenshot/vision grounding in the observe step (`act:observe` can return a
+  `screenshot` field when requested), cross-page goal persistence is done via bg state, trusted
+  input is a Chrome-only opt-in.
 
 ## Base extension milestones (done)
 
@@ -45,8 +46,17 @@
   - `act.ts executeActions()`: sequential executor w/ Spotlight narration, stale-index detection,
     confirmation gate (red confirm bar) for destructive names (delete/pay/submit/sign out/…) and
     `submit:true`, form.requestSubmit + Enter fallback
-- [ ] **A3 — Agent loop**: background orchestrator, Observe→Think→Act, autonomy levels (Supervise/
-  Normal/Auto), Stop, step narration, sweep highlights
+- [x] **A3 — Agent loop** (v0.7.0)
+  - `entrypoints/background/agent.ts`: per-tab state (`session:agent:{tabId}`), 12-step loop,
+    Observe→Think→Act, JSON-only action prompts + tolerant parse with one retry, observe retry
+    (15s) doubles as post-navigation readiness detection, Stop via port + AbortController,
+    narration replay on panel remount
+  - Composer: Agent button (flips to red Stop while running) + autonomy select
+    (Supervise = confirm every action on-page, Normal = destructive-only confirms, Auto = none);
+    chat send/embeds disabled while the agent runs
+  - RPC: `agent:get` (bg), `act:observe` / `act:execute{confirmMode}` (bg→content)
+- [ ] **A4 — Multi-page + grounding**: navigate ops across pages work via the loop; remaining:
+  screenshot/vision grounding in observe, Wikipedia-hop end-to-end test, optional trusted input
 - [ ] **A4 — Multi-page + grounding**: navigate/link ops across pages, readiness detection,
   screenshot/vision grounding, optional chrome.debugger trusted input (Chrome, opt-in)
 

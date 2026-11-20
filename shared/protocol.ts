@@ -16,3 +16,21 @@ export interface ActionObservation {
   target?: number;
   message?: string;
 }
+
+export type Autonomy = 'supervise' | 'normal' | 'auto';
+
+export type ConfirmMode = 'always' | 'destructive' | 'never';
+
+export interface ObserveResult {
+  index: string;
+  url: string;
+  title: string;
+}
+
+export interface AgentSummary {
+  status: 'idle' | 'running';
+  step: number;
+  goal: string;
+  autonomy: Autonomy;
+  narration: string[];
+}

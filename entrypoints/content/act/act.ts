@@ -1,7 +1,7 @@
 import { buildElementTable, ElementTable, serializeTable } from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
 import { clickElement, copyText, focusElement, setValue } from './executor';
-import type { ActionObservation, ActionOp, ScrollTarget } from '@/shared/protocol';
+import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
 const PANEL_HOST_ID = 'browser-agent-root';
@@ -77,19 +77,26 @@ export function serializeIndex(): string | null {
 const DESTRUCTIVE_PATTERN =
   /delete|remove|pay|purchase|checkout|sign ?out|log ?out|confirm|submit|send|post|buy|place order|empty|trash/i;
 
-export async function executeActions(actions: ActionOp[]): Promise<ActionObservation[]> {
+export async function executeActions(
+  actions: ActionOp[],
+  confirmMode: ConfirmMode = 'destructive',
+): Promise<ActionObservation[]> {
   const observations: ActionObservation[] = [];
   if (!spotlight) {
     return actions.map((action) => ({ ok: false, op: action.op, message: 'Spotlight not mounted' }));
   }
   const current = ensureFreshTable();
   for (const action of actions) {
-    observations.push(await runAction(action, current));
+    observations.push(await runAction(action, current, confirmMode));
   }
   return observations;
 }
 
-async function runAction(action: ActionOp, current: ElementTable): Promise<ActionObservation> {
+async function runAction(
+  action: ActionOp,
+  current: ElementTable,
+  confirmMode: ConfirmMode,
+): Promise<ActionObservation> {
   const sp = spotlight;
   if (!sp) return { ok: false, op: action.op, message: 'Spotlight not mounted' };
   const base: Omit<ActionObservation, 'ok'> = {
@@ -101,7 +108,7 @@ async function runAction(action: ActionOp, current: ElementTable): Promise<Actio
       case 'click': {
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
-        if (isDestructive(resolved.info.name, resolved.info.role)) {
+        if (needsConfirm(confirmMode, resolved.info, false)) {
           const ok = await sp.confirmBar(
             resolved.element.getBoundingClientRect(),
             `Click "${resolved.info.name || resolved.info.role}"?`,
@@ -123,7 +130,7 @@ async function runAction(action: ActionOp, current: ElementTable): Promise<Actio
         ) {
           return { ...base, ok: false, message: `[${action.target}] is not a text field` };
         }
-        if (action.submit || isDestructive(resolved.info.name, resolved.info.role)) {
+        if (needsConfirm(confirmMode, resolved.info, action.submit === true)) {
           const ok = await sp.confirmBar(
             field.getBoundingClientRect(),
             action.submit
@@ -200,6 +207,16 @@ function resolve(
 
 function isDestructive(name: string, role: string): boolean {
   return DESTRUCTIVE_PATTERN.test(name) || (role === 'button' && /submit/i.test(name));
+}
+
+function needsConfirm(
+  confirmMode: ConfirmMode,
+  info: { name: string; role: string },
+  submit: boolean,
+): boolean {
+  if (confirmMode === 'never') return false;
+  if (confirmMode === 'always') return true;
+  return submit || isDestructive(info.name, info.role);
 }
 
 function submitForm(field: HTMLInputElement | HTMLTextAreaElement): void {

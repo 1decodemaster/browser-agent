@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { ChatMessage, ChatPortMessage } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
+import { removeAgentState, startAgent, stopAgent } from './agent';
 import { normalizeEndpoint } from '@/shared/endpoint';
 
 type Port = ReturnType<typeof browser.runtime.connect>;
@@ -47,6 +48,10 @@ export function watchChatPorts(): void {
         void handleSend(port, tabId, message, controllers);
       } else if (message.type === 'chat.stop') {
         controllers.get(message.requestId)?.abort();
+      } else if (message.type === 'agent.start') {
+        void startAgent(port, tabId, message.goal, message.autonomy);
+      } else if (message.type === 'agent.stop') {
+        stopAgent(tabId);
       }
     });
     port.onDisconnect.addListener(() => {
@@ -57,6 +62,7 @@ export function watchChatPorts(): void {
 
   browser.tabs.onRemoved.addListener((tabId) => {
     void storage.removeItem(chatKey(tabId));
+    removeAgentState(tabId);
   });
 }
 

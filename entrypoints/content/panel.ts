@@ -1,5 +1,6 @@
 import { rpc } from '@/shared/rpc';
 import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/types';
+import type { AgentSummary, Autonomy } from '@/shared/protocol';
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageHtml } from './dom-context';
 import { renderMarkdown } from './markdown';
@@ -28,6 +29,8 @@ interface Handles {
   hint: HTMLElement;
   embedButtons: HTMLButtonElement[];
   dock: HTMLButtonElement;
+  agentBtn: HTMLButtonElement;
+  autonomySelect: HTMLSelectElement;
 }
 
 interface PersistedUi {
@@ -40,6 +43,7 @@ let embeds: Embed[] = [];
 let activeRequestId: string | null = null;
 let pendingAssistant: { bubble: HTMLElement; text: string } | null = null;
 let pendingReasoning: { bubble: HTMLElement; text: string } | null = null;
+let agentRunning = false;
 let snapped = false;
 let snapWidth = 380;
 let savedHtmlMargin: string | null = null;
@@ -124,6 +128,25 @@ export function mountUi(css: string): void {
 
   const inputRow = document.createElement('div');
   inputRow.className = 'ba-input-row';
+  const agentBtn = document.createElement('button');
+  agentBtn.className = 'ba-agent-btn';
+  agentBtn.type = 'button';
+  agentBtn.title = 'Run this message as an autonomous agent goal';
+  agentBtn.textContent = 'Agent';
+  const autonomySelect = document.createElement('select');
+  autonomySelect.className = 'ba-autonomy';
+  autonomySelect.title = 'Autonomy level: approve every action, auto with confirmations, or fully autonomous';
+  for (const [value, label] of [
+    ['supervise', 'Supervise'],
+    ['normal', 'Normal'],
+    ['auto', 'Auto'],
+  ] as Array<[Autonomy, string]>) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    autonomySelect.append(option);
+  }
+  autonomySelect.value = 'normal';
   const input = document.createElement('textarea');
   input.className = 'ba-input';
   input.placeholder = 'Ask about this page…';
@@ -132,7 +155,7 @@ export function mountUi(css: string): void {
   send.className = 'ba-send';
   send.type = 'button';
   send.textContent = 'Send';
-  inputRow.append(input, send);
+  inputRow.append(agentBtn, autonomySelect, input, send);
 
   const resizer = document.createElement('div');
   resizer.className = 'ba-resizer';
@@ -153,6 +176,8 @@ export function mountUi(css: string): void {
     hint,
     embedButtons: [embedHtmlButton, embedShotButton],
     dock,
+    agentBtn,
+    autonomySelect,
   };
 
   pill.addEventListener('click', togglePanel);
@@ -160,6 +185,7 @@ export function mountUi(css: string): void {
   pill.addEventListener('mouseleave', () => scheduleHide());
   actBtn.addEventListener('click', () => setActMode(!isActMode()));
   onActModeChange((modeActive) => actBtn.classList.toggle('ba-active', modeActive));
+  agentBtn.addEventListener('click', onAgentClick);
   dock.addEventListener('click', () => setSnapped(!snapped));
   close.addEventListener('click', closePanel);
   send.addEventListener('click', onSendClick);
@@ -186,6 +212,7 @@ export function mountUi(css: string): void {
     if (href) window.open(href, '_blank', 'noopener');
   });
   void loadHistory();
+  void restoreAgentState();
 
   const saved = loadUi();
   if (saved?.snapped) {
@@ -224,7 +251,7 @@ export function mountUi(css: string): void {
   }
 
   async function sendMessage(): Promise<void> {
-    if (!handles) return;
+    if (!handles || agentRunning) return;
     const text = handles.input.value.trim();
 
     if (text.toLowerCase() === 'help') {
@@ -313,6 +340,35 @@ export function mountUi(css: string): void {
         activeRequestId = null;
         break;
       }
+      case 'agent.started': {
+        agentRunning = true;
+        updateComposerState();
+        break;
+      }
+      case 'agent.step': {
+        addNote(`Step ${message.step}: ${message.thought || '(no thought)'}`);
+        for (const observation of message.observations) {
+          const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
+          addNote(
+            observation.ok
+              ? `  ${label} → ok${observation.message ? ` — ${observation.message}` : ''}`
+              : `  ${label} → failed — ${observation.message ?? 'unknown error'}`,
+          );
+        }
+        break;
+      }
+      case 'agent.done': {
+        agentRunning = false;
+        updateComposerState();
+        addNote(`Agent finished${message.summary ? `: ${message.summary}` : ''}.`);
+        break;
+      }
+      case 'agent.error': {
+        agentRunning = false;
+        updateComposerState();
+        addNote(`Agent error: ${message.message}`);
+        break;
+      }
     }
   }
 
@@ -348,9 +404,58 @@ export function mountUi(css: string): void {
   }
 
   function setStreaming(streaming: boolean): void {
+    void streaming;
+    updateComposerState();
+  }
+
+  function updateComposerState(): void {
     if (!handles) return;
-    handles.send.textContent = streaming ? 'Stop' : 'Send';
-    for (const button of handles.embedButtons) button.disabled = streaming;
+    const chatBusy = activeRequestId != null;
+    const busy = chatBusy || agentRunning;
+    handles.send.textContent = chatBusy ? 'Stop' : 'Send';
+    handles.send.disabled = agentRunning;
+    for (const button of handles.embedButtons) button.disabled = busy;
+    handles.agentBtn.textContent = agentRunning ? 'Stop' : 'Agent';
+    handles.agentBtn.classList.toggle('ba-running', agentRunning);
+    handles.agentBtn.disabled = chatBusy;
+    handles.autonomySelect.disabled = busy;
+  }
+
+  function onAgentClick(): void {
+    if (!handles) return;
+    if (agentRunning) {
+      chatPost({ type: 'agent.stop' });
+      return;
+    }
+    const goal = handles.input.value.trim();
+    if (!goal) {
+      handles.input.focus();
+      return;
+    }
+    agentRunning = true;
+    updateComposerState();
+    addNote(`Agent goal: ${goal}`);
+    handles.input.value = '';
+    autosize();
+    chatPost({
+      type: 'agent.start',
+      goal,
+      autonomy: handles.autonomySelect.value as Autonomy,
+    });
+  }
+
+  async function restoreAgentState(): Promise<void> {
+    try {
+      const state = await rpc<AgentSummary>({ kind: 'agent:get' });
+      if (state.status !== 'running' || !handles) return;
+      agentRunning = true;
+      handles.autonomySelect.value = state.autonomy;
+      updateComposerState();
+      addNote(`Agent running: "${state.goal}" (step ${state.step})`);
+      for (const line of state.narration.slice(-10)) addNote(line);
+    } catch {
+      return;
+    }
   }
 
   function embedHtml(): void {

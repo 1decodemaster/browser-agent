@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import { onRpc, type RpcSender } from '@/shared/rpc';
 import { clearHistory, getHistory, watchChatPorts } from './chat';
+import { getAgentSummary } from './agent';
 
 export default defineBackground(() => {
   watchChatPorts();
@@ -14,6 +15,11 @@ export default defineBackground(() => {
         return true;
       case 'screenshot:capture':
         return { dataUrl: await captureScreenshot(requireTab(sender)) };
+      case 'agent:get':
+        return getAgentSummary(requireTab(sender));
+      case 'act:observe':
+      case 'act:execute':
+        throw new Error('act:* requests are handled by the content script');
       case 'panel:toggle':
         return true;
       default: {

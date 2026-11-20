@@ -444,3 +444,48 @@
 .ba-send:hover {
   background: #3f7bef;
 }
+
+.ba-agent-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  background: #1d2129;
+  color: #c9d1d9;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ba-agent-btn:hover {
+  background: #262b35;
+  color: #fff;
+}
+
+.ba-agent-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ba-agent-btn.ba-running {
+  background: #3a1512;
+  border-color: rgba(229, 83, 75, 0.5);
+  color: #ff9d96;
+}
+
+.ba-autonomy {
+  font: inherit;
+  font-size: 11px;
+  background: #1d2129;
+  color: #c9d1d9;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 0 2px;
+  height: 33px;
+  cursor: pointer;
+}
+
+.ba-autonomy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
