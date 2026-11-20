@@ -6,9 +6,23 @@
 
 ## Current status
 
-- **Extension version:** 0.8.1 (agent-loop reliability fixes)
+- **Extension version:** 0.8.2 (agent persistence + keepalive + debug tooling)
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
+- v0.8.2 fixes from real-world agent testing (Wikipedia hops, flight sites):
+  - **Keepalive** (`background/keepalive.ts`, refcounted 20s API ping): holds the MV3 SW alive
+    during long agent runs AND chat streams — kills the "SW died mid-run → silent death, dead
+    Stop, decaying inference" class
+  - **Runs are terminal + persisted**: status now `idle|running|finished`; narration is complete
+    (errors + final summary pushed into it); `getAgentSummary` replays state even when finished;
+    panel shows "Last agent run … type `agent log` to replay" after navigation instead of
+    vanishing
+  - **`agent log` command** replays the stored run; **`debug` command** toggles per-step details
+    (observe entry count + ms, LLM ms + chars, parse retries) shown in the panel and always
+    logged to the SW console (`[agent]` prefix)
+  - **Confirm semantics**: ask-first OFF now confirms only high-risk buttons
+    (delete/remove/pay/checkout/buy/sign out/place order/trash); `submit:true` no longer forces a
+    prompt. Ask-first ON confirms every click/fill.
 - v0.8.1 reliability fixes (root cause: MV3 SW death during minutes-long NON-streaming agent
   calls on huge indexes → in-flight request dropped, activeRuns lost, Stop no-op, panel stuck):
   - `background/llm.ts`: shared `streamChat()` — ALL LLM calls now stream (keeps SW/connection

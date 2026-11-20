@@ -46,12 +46,14 @@ function isPlausibleUrl(value: string): boolean {
 }
 
 export const COMMAND_HELP = [
-  'Local commands (anything else goes to the LLM):',
+  'Local commands (anything else goes to the LLM, or starts an agent run when Act is on):',
   '  click <n> — click indexed element',
   '  type "text" into <n> [and submit] — fill a field',
   '  clear <n> — empty a field',
   '  extract <n> — read element text into the chat',
   '  scroll top|bottom|up|down',
   '  navigate <url>',
-  'Turn on Act mode to see element indexes and pin elements.',
+  '  agent log — replay the last agent run for this tab',
+  '  debug — toggle per-step timings (also in the service worker console)',
+  'Turn on Act mode to see element indexes, pin elements, and run goals.',
 ].join('\n');

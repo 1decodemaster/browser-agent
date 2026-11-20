@@ -87,8 +87,8 @@ export function serializeIndex(): string | null {
   return current ? serializeTable(current) : null;
 }
 
-const DESTRUCTIVE_PATTERN =
-  /delete|remove|pay|purchase|checkout|sign ?out|log ?out|confirm|submit|send|post|buy|place order|empty|trash/i;
+const HIGH_RISK_PATTERN =
+  /delete|remove|pay|purchase|checkout|buy|sign ?out|log ?out|place order|trash|empty/i;
 
 export async function executeActions(
   actions: ActionOp[],
@@ -220,18 +220,18 @@ function resolve(
   return { element: hit.element, info: hit.info };
 }
 
-function isDestructive(name: string, role: string): boolean {
-  return DESTRUCTIVE_PATTERN.test(name) || (role === 'button' && /submit/i.test(name));
+function isHighRisk(name: string): boolean {
+  return HIGH_RISK_PATTERN.test(name);
 }
 
 function needsConfirm(
   confirmMode: ConfirmMode,
   info: { name: string; role: string },
-  submit: boolean,
+  _submit: boolean,
 ): boolean {
   if (confirmMode === 'never') return false;
   if (confirmMode === 'always') return true;
-  return submit || isDestructive(info.name, info.role);
+  return isHighRisk(info.name);
 }
 
 function submitForm(field: HTMLInputElement | HTMLTextAreaElement): void {

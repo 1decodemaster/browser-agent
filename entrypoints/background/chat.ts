@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 import type { ChatMessage, ChatPortMessage } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
 import { streamChat, type ApiContentPart, type ApiMessage } from './llm';
+import { acquireKeepalive, releaseKeepalive } from './keepalive';
 import { removeAgentState, resumeAgentIfStale, startAgent, stopAgent } from './agent';
 import { normalizeEndpoint } from '@/shared/endpoint';
 
@@ -99,6 +100,7 @@ async function handleSend(
   controllers.set(requestId, controller);
 
   const base = normalizeEndpoint(settings.endpointUrl);
+  acquireKeepalive();
   try {
     const acc = await streamChat({
       base,
@@ -127,6 +129,7 @@ async function handleSend(
       port.postMessage({ type: 'chat.error', requestId, message: describeError(error) });
     }
   } finally {
+    releaseKeepalive();
     controllers.delete(requestId);
   }
 }

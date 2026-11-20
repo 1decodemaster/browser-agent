@@ -247,6 +247,32 @@ export function mountUi(css: string): void {
       return;
     }
 
+    const lower = text.toLowerCase();
+    if (lower === 'agent log') {
+      addUserMessage(text);
+      const state = await rpc<AgentSummary>({ kind: 'agent:get' });
+      if (!state.narration.length) {
+        addNote('No agent log for this tab yet.');
+      } else {
+        addNote(
+          `Agent "${state.goal}" (${state.status}, step ${state.step}) — replaying ${state.narration.length} line(s):`,
+        );
+        for (const line of state.narration) addNote(line);
+      }
+      return;
+    }
+
+    if (lower === 'debug') {
+      addUserMessage(text);
+      const enabled = await rpc<boolean>({ kind: 'agent:debug' });
+      addNote(
+        enabled
+          ? 'Agent debug details ON — timings also in the service worker console (chrome://extensions → Browser Agent → Inspect views: service worker).'
+          : 'Agent debug details OFF.',
+      );
+      return;
+    }
+
     const commandOps = parseCommand(text);
     if (commandOps) {
       addUserMessage(text);
@@ -339,6 +365,7 @@ export function mountUi(css: string): void {
       }
       case 'agent.step': {
         addNote(`Step ${message.step}: ${message.thought || '(no thought)'}`);
+        for (const detail of message.details ?? []) addNote(`  · ${detail}`);
         for (const observation of message.observations) {
           const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
           addNote(
@@ -412,12 +439,18 @@ export function mountUi(css: string): void {
   async function restoreAgentState(): Promise<void> {
     try {
       const state = await rpc<AgentSummary>({ kind: 'agent:get' });
-      if (state.status !== 'running' || !handles) return;
-      agentRunning = true;
-      setAskFirst(state.askFirst);
-      updateComposerState();
-      addNote(`Agent running: "${state.goal}" (step ${state.step})`);
-      for (const line of state.narration.slice(-10)) addNote(line);
+      if (!handles) return;
+      if (state.status === 'running') {
+        agentRunning = true;
+        setAskFirst(state.askFirst);
+        updateComposerState();
+        addNote(`Agent running: "${state.goal}" (step ${state.step})`);
+        for (const line of state.narration.slice(-10)) addNote(line);
+      } else if (state.status === 'finished' && state.goal) {
+        addNote(
+          `Last agent run: "${state.goal}" (step ${state.step}) — type "agent log" to replay.`,
+        );
+      }
     } catch {
       return;
     }

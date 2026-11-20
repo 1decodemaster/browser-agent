@@ -2,6 +2,7 @@ import { rpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
 import { streamChat, type ApiMessage } from './llm';
+import { acquireKeepalive, releaseKeepalive } from './keepalive';
 import type {
   ActionObservation,
   ActionOp,
@@ -21,8 +22,9 @@ interface AgentState {
   goal: string;
   askFirst: boolean;
   step: number;
-  status: 'idle' | 'running';
+  status: 'idle' | 'running' | 'finished';
   narration: string[];
+  debug?: boolean;
 }
 
 interface RunHandle {
@@ -41,12 +43,14 @@ const AGENT_SYSTEM = [
 ].join('\n');
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
+  await resumeAgentIfStale(tabId);
   const state = await loadState(tabId);
-  if (!state || !activeRuns.has(tabId)) {
+  if (!state) {
     return { status: 'idle', step: 0, goal: '', askFirst: false, narration: [] };
   }
+  const running = state.status === 'running' && activeRuns.has(tabId);
   return {
-    status: 'running',
+    status: running ? 'running' : state.status === 'running' ? 'finished' : state.status,
     step: state.step,
     goal: state.goal,
     askFirst: state.askFirst,
@@ -54,12 +58,29 @@ export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
   };
 }
 
+export async function toggleAgentDebug(tabId: number): Promise<boolean> {
+  const state =
+    (await loadState(tabId)) ??
+    { goal: '', askFirst: false, step: 0, status: 'idle' as const, narration: [] };
+  state.debug = !(state.debug === true);
+  await saveState(tabId, state);
+  return state.debug;
+}
+
 export async function startAgent(tabId: number, goal: string, askFirst: boolean): Promise<void> {
   if (activeRuns.has(tabId)) {
     notify(tabId, { type: 'agent.error', message: 'Agent is already running.' });
     return;
   }
-  const state: AgentState = { goal, askFirst, step: 0, status: 'running', narration: [] };
+  console.info(`[agent] start tab=${tabId} goal="${goal}" askFirst=${askFirst}`);
+  const state: AgentState = {
+    goal,
+    askFirst,
+    step: 0,
+    status: 'running',
+    narration: [],
+    debug: (await loadState(tabId))?.debug === true,
+  };
   await saveState(tabId, state);
   const run: RunHandle = { stop: false, abort: new AbortController() };
   activeRuns.set(tabId, run);
@@ -69,17 +90,19 @@ export async function startAgent(tabId: number, goal: string, askFirst: boolean)
 export function stopAgent(tabId: number): void {
   const run = activeRuns.get(tabId);
   if (run) {
+    console.info(`[agent] stop requested tab=${tabId}`);
     run.stop = true;
     run.abort.abort();
   }
-  void markIdleIfStale(tabId);
+  void markFinishedIfStale(tabId);
 }
 
-async function markIdleIfStale(tabId: number): Promise<void> {
+async function markFinishedIfStale(tabId: number): Promise<void> {
   if (activeRuns.has(tabId)) return;
   const state = await loadState(tabId);
   if (state?.status === 'running') {
-    state.status = 'idle';
+    state.status = 'finished';
+    state.narration.push('Run interrupted (browser suspended the background worker).');
     await saveState(tabId, state);
   }
 }
@@ -88,6 +111,7 @@ export async function resumeAgentIfStale(tabId: number): Promise<void> {
   if (activeRuns.has(tabId)) return;
   const state = await loadState(tabId);
   if (!state || state.status !== 'running') return;
+  console.info(`[agent] resuming interrupted run tab=${tabId} step=${state.step}`);
   const run: RunHandle = { stop: false, abort: new AbortController() };
   activeRuns.set(tabId, run);
   void runLoop(tabId, run).finally(() => activeRuns.delete(tabId));
@@ -102,7 +126,9 @@ function notify(tabId: number, message: ChatPortMessage): void {
 }
 
 async function runLoop(tabId: number, run: RunHandle): Promise<void> {
-  const state = (await loadState(tabId))!;
+  const state = await loadState(tabId);
+  if (!state) return;
+  acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
   try {
@@ -113,16 +139,22 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       }
       state.step++;
       await saveState(tabId, state);
+      console.info(`[agent] tab=${tabId} step=${state.step}`);
 
+      const observeStart = performance.now();
       const observation = await observeWithRetry(tabId, run);
       if (!observation) {
         error = 'Could not reach the page to observe it.';
         break;
       }
+      const details: string[] = [
+        `observe: ${observation.index ? observation.index.split('\n').length : 0} entries in ${Math.round(performance.now() - observeStart)}ms`,
+      ];
 
       let parsed: { thought: string; actions: ActionOp[] } | null = null;
       let lastError = '';
       for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+        const llmStart = performance.now();
         const raw = await completeOnce(
           state,
           observation,
@@ -131,10 +163,15 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
             ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
             : null,
         );
+        details.push(
+          `llm: ${Math.round(performance.now() - llmStart)}ms, ${raw.length} chars${attempt > 0 ? ' (retry)' : ''}`,
+        );
+        console.info(`[agent] tab=${tabId} llm=${Math.round(performance.now() - llmStart)}ms chars=${raw.length}`);
         try {
           parsed = parseActionResponse(raw);
         } catch (parseError) {
           lastError = parseError instanceof Error ? parseError.message : String(parseError);
+          details.push(`parse failed: ${lastError}`);
         }
       }
       if (!parsed) {
@@ -153,6 +190,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       const observations = executable.length
         ? await executeOnContent(tabId, executable, confirmMode(state.askFirst), run)
         : [];
+      console.info(`[agent] tab=${tabId} executed=${observations.length}`);
 
       const stepLines = [
         `Step ${state.step}: ${parsed.thought || '(no thought)'}`,
@@ -166,6 +204,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         step: state.step,
         thought: parsed.thought,
         observations,
+        details: state.debug ? details : undefined,
       });
 
       if (run.stop) {
@@ -188,7 +227,16 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
     if (run.stop || isAbortError(loopError)) summary = 'Stopped by user.';
     else error = loopError instanceof Error ? loopError.message : String(loopError);
   } finally {
-    state.status = 'idle';
+    releaseKeepalive();
+    state.status = 'finished';
+    if (error) {
+      state.narration.push(`Error: ${error}`);
+      console.warn(`[agent] tab=${tabId} error: ${error}`);
+    } else {
+      state.narration.push(`Finished: ${summary ?? 'done'}`);
+      console.info(`[agent] tab=${tabId} finished: ${summary ?? 'done'}`);
+    }
+    if (state.narration.length > 40) state.narration = state.narration.slice(-40);
     await saveState(tabId, state);
     if (error) notify(tabId, { type: 'agent.error', message: error });
     else notify(tabId, { type: 'agent.done', summary });

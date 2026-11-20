@@ -26,7 +26,7 @@ export interface ObserveResult {
 }
 
 export interface AgentSummary {
-  status: 'idle' | 'running';
+  status: 'idle' | 'running' | 'finished';
   step: number;
   goal: string;
   askFirst: boolean;

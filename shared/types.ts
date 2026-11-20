@@ -25,6 +25,7 @@ export type RpcRequest =
   | { kind: 'chat:clear' }
   | { kind: 'screenshot:capture' }
   | { kind: 'agent:get' }
+  | { kind: 'agent:debug' }
   | { kind: 'act:observe' }
   | { kind: 'act:execute'; actions: ActionOp[]; confirmMode: ConfirmMode }
   | { kind: 'panel:toggle' };
@@ -49,7 +50,7 @@ export type ChatPortMessage =
   | { type: 'chat.error'; requestId: string; message: string }
   | { type: 'agent.start'; goal: string; askFirst: boolean }
   | { type: 'agent.stop' }
-  | { type: 'agent.step'; step: number; thought: string; observations: ActionObservation[] }
+  | { type: 'agent.step'; step: number; thought: string; observations: ActionObservation[]; details?: string[] }
   | { type: 'agent.done'; summary?: string }
   | { type: 'agent.error'; message: string };
 
