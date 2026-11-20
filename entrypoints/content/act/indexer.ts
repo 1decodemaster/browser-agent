@@ -180,13 +180,30 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-export function serializeTable(table: ElementTable): string {
-  const lines: string[] = [];
+export function serializeTable(table: ElementTable, maxEntries = 280): string {
+  const interactive: string[] = [];
+  const content: string[] = [];
   for (const id of table.order) {
     const info = table.info.get(id)!;
     const name = info.name ? ` "${info.name}"` : '';
     const href = info.href ? ` -> ${info.href}` : '';
-    lines.push(`[${info.id}] ${info.role}${name}${href}`);
+    const line = `[${info.id}] ${info.role}${name}${href}`;
+    (info.kind === 'interactive' ? interactive : content).push(line);
   }
-  return lines.join('\n');
+  const picked: string[] = [];
+  for (const line of interactive) {
+    if (picked.length >= maxEntries) break;
+    picked.push(line);
+  }
+  for (const line of content) {
+    if (picked.length >= maxEntries) break;
+    picked.push(line);
+  }
+  const total = table.order.length;
+  if (total > picked.length) {
+    picked.push(
+      `…(${total - picked.length} more elements not shown - scroll or refine the page to reveal them)`,
+    );
+  }
+  return picked.join('\n');
 }

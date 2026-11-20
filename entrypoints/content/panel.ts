@@ -221,6 +221,13 @@ export function mountUi(css: string): void {
   function onSendClick(): void {
     if (agentRunning) {
       chatPost({ type: 'agent.stop' });
+      window.setTimeout(() => {
+        if (agentRunning) {
+          agentRunning = false;
+          updateComposerState();
+          addNote('Agent stopped.');
+        }
+      }, 2000);
       return;
     }
     if (activeRequestId != null) {

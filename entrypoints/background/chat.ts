@@ -1,23 +1,15 @@
 import { browser } from 'wxt/browser';
 import type { ChatMessage, ChatPortMessage } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
-import { removeAgentState, startAgent, stopAgent } from './agent';
+import { streamChat, type ApiContentPart, type ApiMessage } from './llm';
+import { removeAgentState, resumeAgentIfStale, startAgent, stopAgent } from './agent';
 import { normalizeEndpoint } from '@/shared/endpoint';
 
 type Port = ReturnType<typeof browser.runtime.connect>;
 type SendRequest = Extract<ChatPortMessage, { type: 'chat.send' }>;
 
 const SYSTEM_PROMPT =
-  'You are Browser Agent, an assistant embedded in the user\'s browser. The user shares page HTML, screenshots, or questions about the page they are viewing. Answer helpfully and concisely, grounding answers in the provided page context. You can only read and answer - you cannot browse, click, or take any action. If the user asks you to act on the page, tell them to type their goal and press the Agent button instead. If the needed context is missing, say so briefly.';
-
-type ApiContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; image_url: { url: string } };
-
-interface ApiMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string | ApiContentPart[];
-}
+  'You are Browser Agent, an assistant embedded in the user\'s browser. The user shares page HTML, screenshots, or questions about the page they are viewing. Answer helpfully and concisely, grounding answers in the provided page context. You can only read and answer - you cannot browse, click, or take any action. If the user asks you to act on the page, tell them to turn on Act mode and send their goal as an agent run instead. If the needed context is missing, say so briefly.';
 
 const chatKey = (tabId: number) => `session:chat:${tabId}` as const;
 
@@ -48,6 +40,7 @@ export function watchChatPorts(): void {
       return;
     }
     tabPorts.set(tabId, port);
+    void resumeAgentIfStale(tabId);
     const controllers = new Map<string, AbortController>();
     port.onMessage.addListener((raw: unknown) => {
       const message = raw as ChatPortMessage;
@@ -58,7 +51,7 @@ export function watchChatPorts(): void {
       } else if (message.type === 'agent.start') {
         void startAgent(tabId, message.goal, message.askFirst);
       } else if (message.type === 'agent.stop') {
-        stopAgent(tabId);
+        void stopAgent(tabId);
       }
     });
     port.onDisconnect.addListener(() => {
@@ -106,16 +99,14 @@ async function handleSend(
   controllers.set(requestId, controller);
 
   const base = normalizeEndpoint(settings.endpointUrl);
-  let acc = '';
   try {
-    await streamCompletion(
+    const acc = await streamChat({
       base,
-      settings.apiKey,
-      settings.model,
-      buildApiMessages(history),
-      controller.signal,
-      (deltaText, isReasoning) => {
-        if (!isReasoning) acc += deltaText;
+      apiKey: settings.apiKey,
+      model: settings.model,
+      messages: buildApiMessages(history),
+      signal: controller.signal,
+      onDelta: (deltaText, isReasoning) => {
         port.postMessage({
           type: 'chat.delta',
           requestId,
@@ -123,7 +114,7 @@ async function handleSend(
           reasoning: isReasoning,
         });
       },
-    );
+    });
     if (acc) {
       history.push({ role: 'assistant', text: acc });
       await saveHistory(tabId, history);
@@ -131,77 +122,12 @@ async function handleSend(
     port.postMessage({ type: 'chat.done', requestId, text: acc });
   } catch (error) {
     if (controller.signal.aborted) {
-      if (acc) {
-        history.push({ role: 'assistant', text: acc });
-        await saveHistory(tabId, history);
-      }
-      port.postMessage({ type: 'chat.done', requestId, text: acc, stopped: true });
+      port.postMessage({ type: 'chat.done', requestId, text: '', stopped: true });
     } else {
       port.postMessage({ type: 'chat.error', requestId, message: describeError(error) });
     }
   } finally {
     controllers.delete(requestId);
-  }
-}
-
-async function streamCompletion(
-  base: string,
-  apiKey: string,
-  model: string,
-  messages: ApiMessage[],
-  signal: AbortSignal,
-  onDelta: (text: string, reasoning: boolean) => void,
-): Promise<void> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const url = `${base}/v1/chat/completions`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    signal,
-    body: JSON.stringify({ model, messages, stream: true }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(
-      `HTTP ${response.status} ${response.statusText} from ${url}${body ? ` - ${body.slice(0, 300)}` : ''}`,
-    );
-  }
-  if (!response.body) throw new Error('Response has no body');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let done = false;
-  while (!done) {
-    const { done: finished, value } = await reader.read();
-    if (finished) break;
-    buffer += decoder.decode(value, { stream: true });
-    for (;;) {
-      const newline = buffer.indexOf('\n');
-      if (newline < 0) break;
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') {
-        done = true;
-        break;
-      }
-      try {
-        const chunk = JSON.parse(data) as {
-          choices?: Array<{
-            delta?: { content?: string; reasoning?: string; reasoning_content?: string };
-          }>;
-        };
-        const delta = chunk.choices?.[0]?.delta;
-        const reasoning = delta?.reasoning ?? delta?.reasoning_content;
-        if (delta?.content) onDelta(delta.content, false);
-        else if (reasoning) onDelta(reasoning, true);
-      } catch {
-        buffer = '';
-      }
-    }
   }
 }
 
@@ -234,6 +160,9 @@ function buildApiMessages(history: ChatMessage[]): ApiMessage[] {
 }
 
 function describeError(error: unknown): string {
+  if (error instanceof DOMException && error.name === 'TimeoutError') {
+    return 'LLM request timed out - the model took too long to respond.';
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof TypeError) {
     return `${message} - could not reach the endpoint. For Ollama set OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*"; in LM Studio enable CORS.`;

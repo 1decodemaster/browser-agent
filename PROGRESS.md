@@ -6,9 +6,20 @@
 
 ## Current status
 
-- **Extension version:** 0.8.0 (UX redesign: Act-subsumes-Agent; port registry; per-mode LLM config)
-- **Act Mode phase:** A1–A3 done, redesigned in v0.8.0 — next: **A4** (vision grounding,
-  Wikipedia-hop end-to-end test, optional chrome.debugger trusted input)
+- **Extension version:** 0.8.1 (agent-loop reliability fixes)
+- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input)
+- v0.8.1 reliability fixes (root cause: MV3 SW death during minutes-long NON-streaming agent
+  calls on huge indexes → in-flight request dropped, activeRuns lost, Stop no-op, panel stuck):
+  - `background/llm.ts`: shared `streamChat()` — ALL LLM calls now stream (keeps SW/connection
+    alive), 120s hard timeout via `AbortSignal.any([run, timeout])`, timeout surfaced as clean
+    error; chat.ts refactored onto it
+  - Index cap: `serializeTable(table, maxEntries=280)` — interactive elements prioritized, 
+    truncation note appended (fixes prompt bloat on flight/e-commerce pages)
+  - **Auto-resume**: `resumeAgentIfStale(tabId)` on every port connect — if storage says running
+    but no active run (SW restarted), the loop resumes from saved state/step
+  - **Stop hardening**: stopAgent marks stale running state idle; panel Stop falls back to
+    force-unlock after 2s if no done/error arrives
 - v0.8.0 redesign highlights:
   - **Composer is just [input][Send]** — Agent button + autonomy select removed. Send behavior:
     Act OFF → chat; Act ON → agent goal; `click 12`-style commands always local; Send reads

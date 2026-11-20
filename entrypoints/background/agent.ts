@@ -1,6 +1,7 @@
 import { rpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
+import { streamChat, type ApiMessage } from './llm';
 import type {
   ActionObservation,
   ActionOp,
@@ -67,9 +68,29 @@ export async function startAgent(tabId: number, goal: string, askFirst: boolean)
 
 export function stopAgent(tabId: number): void {
   const run = activeRuns.get(tabId);
-  if (!run) return;
-  run.stop = true;
-  run.abort.abort();
+  if (run) {
+    run.stop = true;
+    run.abort.abort();
+  }
+  void markIdleIfStale(tabId);
+}
+
+async function markIdleIfStale(tabId: number): Promise<void> {
+  if (activeRuns.has(tabId)) return;
+  const state = await loadState(tabId);
+  if (state?.status === 'running') {
+    state.status = 'idle';
+    await saveState(tabId, state);
+  }
+}
+
+export async function resumeAgentIfStale(tabId: number): Promise<void> {
+  if (activeRuns.has(tabId)) return;
+  const state = await loadState(tabId);
+  if (!state || state.status !== 'running') return;
+  const run: RunHandle = { stop: false, abort: new AbortController() };
+  activeRuns.set(tabId, run);
+  void runLoop(tabId, run).finally(() => activeRuns.delete(tabId));
 }
 
 export function removeAgentState(tabId: number): void {
@@ -229,9 +250,6 @@ async function completeOnce(
   const effort = settings.actReasoningEffort?.trim();
 
   const base = normalizeEndpoint(endpoint);
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
-
   const system = settings.actExtraInstructions?.trim()
     ? `${AGENT_SYSTEM}\n\nAdditional instructions from the user:\n${settings.actExtraInstructions.trim()}`
     : AGENT_SYSTEM;
@@ -251,30 +269,19 @@ async function completeOnce(
     .filter(Boolean)
     .join('\n');
 
-  const response = await fetch(`${base}/v1/chat/completions`, {
-    method: 'POST',
-    headers,
+  const messages: ApiMessage[] = [
+    { role: 'system', content: system },
+    { role: 'user', content: userContent },
+  ];
+
+  return streamChat({
+    base,
+    apiKey: settings.apiKey,
+    model,
+    messages,
     signal,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: userContent },
-      ],
-      stream: false,
-      ...(effort ? { reasoning_effort: effort } : {}),
-    }),
+    extraBody: effort ? { reasoning_effort: effort } : undefined,
   });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(
-      `HTTP ${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 300)}` : ''}`,
-    );
-  }
-  const payload = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  return payload.choices?.[0]?.message?.content ?? '';
 }
 
 function parseActionResponse(raw: string): { thought: string; actions: ActionOp[] } {
