@@ -84,6 +84,29 @@
   display: flex;
 }
 
+.baa-bar.baa-confirm {
+  display: flex;
+  align-items: center;
+}
+
+.baa-confirm-text {
+  font-size: 12px;
+  color: #e8eaed;
+  padding: 0 4px;
+  max-width: 280px;
+}
+
+.baa-bar .baa-danger {
+  background: #3a1512;
+  border-color: rgba(229, 83, 75, 0.5);
+  color: #ff9d96;
+}
+
+.baa-bar .baa-danger:hover {
+  background: #54201b;
+  color: #ffb3ad;
+}
+
 .baa-bar button {
   font: 12px system-ui, -apple-system, sans-serif;
   color: #c9d1d9;

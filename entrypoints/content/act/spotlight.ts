@@ -15,6 +15,7 @@ export interface Spotlight {
   setBanner(text: string | null): void;
   showActionBar(rect: DOMRect, actions: ActionItem[]): void;
   showFillBar(rect: DOMRect, onSubmit: (value: string) => void, onCancel: () => void): void;
+  confirmBar(rect: DOMRect, text: string): Promise<boolean>;
   hideBar(): void;
 }
 
@@ -140,6 +141,40 @@ export function mountSpotlight(css: string): Spotlight {
     hideBar() {
       barVisible = false;
       bar.replaceChildren();
+    },
+
+    confirmBar(rect, text) {
+      return new Promise<boolean>((resolve) => {
+        barVisible = true;
+        bar.replaceChildren();
+        bar.classList.remove('baa-fill');
+        bar.classList.add('baa-confirm');
+        const message = document.createElement('span');
+        message.className = 'baa-confirm-text';
+        message.textContent = text;
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.className = 'baa-danger';
+        confirm.textContent = 'Confirm';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = 'Cancel';
+        const finish = (value: boolean) => {
+          bar.classList.remove('baa-confirm');
+          bar.replaceChildren();
+          resolve(value);
+        };
+        confirm.addEventListener('click', (event) => {
+          event.stopPropagation();
+          finish(true);
+        });
+        cancel.addEventListener('click', (event) => {
+          event.stopPropagation();
+          finish(false);
+        });
+        bar.append(message, confirm, cancel);
+        positionBar(rect);
+      });
     },
   };
 

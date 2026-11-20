@@ -3,7 +3,8 @@ import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/type
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageHtml } from './dom-context';
 import { renderMarkdown } from './markdown';
-import { isActMode, onActModeChange, setActMode } from './act/act';
+import { isActMode, onActModeChange, setActMode, executeActions } from './act/act';
+import { COMMAND_HELP, parseCommand } from './act/commands';
 
 const HOST_ID = 'browser-agent-root';
 const UI_KEY = '__ba_ui';
@@ -222,9 +223,31 @@ export function mountUi(css: string): void {
     sendMessage();
   }
 
-  function sendMessage(): void {
+  async function sendMessage(): Promise<void> {
     if (!handles) return;
     const text = handles.input.value.trim();
+
+    if (text.toLowerCase() === 'help') {
+      addUserMessage(text);
+      addNote(COMMAND_HELP);
+      return;
+    }
+
+    const commandOps = parseCommand(text);
+    if (commandOps) {
+      addUserMessage(text);
+      const observations = await executeActions(commandOps);
+      for (const observation of observations) {
+        const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
+        addNote(
+          observation.ok
+            ? `${label} → ok${observation.message ? ` — ${observation.message}` : ''}`
+            : `${label} → failed — ${observation.message ?? 'unknown error'}`,
+        );
+      }
+      return;
+    }
+
     const htmlEmbed = embeds.find((embed) => embed.kind === 'html');
     const shotEmbed = embeds.find((embed) => embed.kind === 'screenshot');
     if (!text && !htmlEmbed && !shotEmbed) return;

@@ -6,9 +6,12 @@
 
 ## Current status
 
-- **Extension version:** 0.5.1 (base + Act Mode A1 + chat clear/export)
-- **Act Mode phase:** **A1 complete** — next: **A2** (executor + declarative JSON schema)
-- Resume A2 by reading ACT_MODE.md §4 + the A2 file notes below.
+- **Extension version:** 0.6.0 (base + Act Mode A1 + A2 + chat clear/export)
+- **Act Mode phase:** **A2 complete** — next: **A3** (agent loop: background orchestrator,
+  Observe→Think→Act, autonomy levels, Stop, step narration, sweep highlights)
+- A3 entry points that already exist: `serializeTable()` (LLM-ready index), `executeActions()`
+  (executor w/ rails + confirm), spotlight sweep colors; missing: bg orchestration, LLM
+  action-parsing prompt, per-tab agent state, autonomy UI.
 
 ## Base extension milestones (done)
 
@@ -33,8 +36,15 @@
     dirty-flag rebuild, Esc = unpin then exit)
   - "Ask about this" prefills chat input via `prefillInput` export; panel Escape handler disabled
     while Act mode is on
-- [ ] **A2 — Executor + declarative schema**: JSON action grammar (click/type/scroll/extract/
-  navigate/wait/done), tolerant parse, confirmations for destructive ops, manual drive from chat
+- [x] **A2 — Executor + declarative schema** (v0.6.0)
+  - `shared/protocol.ts`: ActionOp grammar (click/type/scroll/extract/navigate/wait/done) +
+    ActionObservation
+  - `act/commands.ts`: strict local command grammar (`click 12`, `type "x" into 17 [and submit]`,
+    `clear 17`, `extract 23`, `scroll top|bottom|up|down`, `navigate <url>`, `help`) — non-matching
+    input still goes to the LLM
+  - `act.ts executeActions()`: sequential executor w/ Spotlight narration, stale-index detection,
+    confirmation gate (red confirm bar) for destructive names (delete/pay/submit/sign out/…) and
+    `submit:true`, form.requestSubmit + Enter fallback
 - [ ] **A3 — Agent loop**: background orchestrator, Observe→Think→Act, autonomy levels (Supervise/
   Normal/Auto), Stop, step narration, sweep highlights
 - [ ] **A4 — Multi-page + grounding**: navigate/link ops across pages, readiness detection,

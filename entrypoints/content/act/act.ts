@@ -1,6 +1,7 @@
 import { buildElementTable, ElementTable, serializeTable } from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
 import { clickElement, copyText, focusElement, setValue } from './executor';
+import type { ActionObservation, ActionOp, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
 const PANEL_HOST_ID = 'browser-agent-root';
@@ -71,6 +72,160 @@ export function getElementTable(): ElementTable | null {
 export function serializeIndex(): string | null {
   const current = getElementTable();
   return current ? serializeTable(current) : null;
+}
+
+const DESTRUCTIVE_PATTERN =
+  /delete|remove|pay|purchase|checkout|sign ?out|log ?out|confirm|submit|send|post|buy|place order|empty|trash/i;
+
+export async function executeActions(actions: ActionOp[]): Promise<ActionObservation[]> {
+  const observations: ActionObservation[] = [];
+  if (!spotlight) {
+    return actions.map((action) => ({ ok: false, op: action.op, message: 'Spotlight not mounted' }));
+  }
+  const current = ensureFreshTable();
+  for (const action of actions) {
+    observations.push(await runAction(action, current));
+  }
+  return observations;
+}
+
+async function runAction(action: ActionOp, current: ElementTable): Promise<ActionObservation> {
+  const sp = spotlight;
+  if (!sp) return { ok: false, op: action.op, message: 'Spotlight not mounted' };
+  const base: Omit<ActionObservation, 'ok'> = {
+    op: action.op,
+    target: 'target' in action ? action.target : undefined,
+  };
+  try {
+    switch (action.op) {
+      case 'click': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        if (isDestructive(resolved.info.name, resolved.info.role)) {
+          const ok = await sp.confirmBar(
+            resolved.element.getBoundingClientRect(),
+            `Click "${resolved.info.name || resolved.info.role}"?`,
+          );
+          if (!ok) return { ...base, ok: false, message: 'cancelled' };
+        }
+        sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
+        clickElement(resolved.element);
+        flashSuccess(resolved.element);
+        return { ...base, ok: true, message: resolved.info.name || resolved.info.role };
+      }
+      case 'type': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        const field = resolved.element as HTMLInputElement | HTMLTextAreaElement;
+        if (
+          !(field instanceof HTMLInputElement) &&
+          !(field instanceof HTMLTextAreaElement)
+        ) {
+          return { ...base, ok: false, message: `[${action.target}] is not a text field` };
+        }
+        if (action.submit || isDestructive(resolved.info.name, resolved.info.role)) {
+          const ok = await sp.confirmBar(
+            field.getBoundingClientRect(),
+            action.submit
+              ? `Fill and submit "${resolved.info.name || resolved.info.role}"?`
+              : `Fill "${resolved.info.name || resolved.info.role}"?`,
+          );
+          if (!ok) return { ...base, ok: false, message: 'cancelled' };
+        }
+        sp.highlight(field.getBoundingClientRect(), 'focus', true);
+        setValue(field, action.text);
+        if (action.submit) submitForm(field);
+        flashSuccess(field);
+        return {
+          ...base,
+          ok: true,
+          message: `${action.text.length} char(s)${action.submit ? ' + submit' : ''}`,
+        };
+      }
+      case 'scroll': {
+        if ('to' in action) {
+          scrollToTarget(action.to);
+        } else {
+          const resolved = resolve(action.target, current);
+          if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+          resolved.element.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+        }
+        return { ...base, ok: true };
+      }
+      case 'extract': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        const text = elementText(resolved.element);
+        sp.highlight(resolved.element.getBoundingClientRect(), 'success');
+        window.setTimeout(() => {
+          if (active && pinned?.element === resolved.element) {
+            sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
+          } else {
+            sp.hideHighlight();
+          }
+        }, 600);
+        return { ...base, ok: true, message: text.slice(0, 200) || '(empty)' };
+      }
+      case 'navigate': {
+        window.location.href = action.url;
+        return { ...base, ok: true, message: action.url };
+      }
+      case 'wait': {
+        await delay(Math.min(Math.max(action.ms, 0), 5000));
+        return { ...base, ok: true, message: `${Math.min(action.ms, 5000)}ms` };
+      }
+      case 'done': {
+        return { ...base, ok: true, message: action.summary };
+      }
+      default: {
+        const unreachable: never = action;
+        void unreachable;
+        return { ok: false, op: 'unknown', message: 'unknown op' };
+      }
+    }
+  } catch (error) {
+    return { ...base, ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function resolve(
+  id: number,
+  current: ElementTable,
+): { element: HTMLElement; info: { tag: string; role: string; kind: string; name: string } } | null {
+  const hit = current.get(id);
+  if (!hit) return null;
+  if (!(hit.element instanceof HTMLElement) || !hit.element.isConnected) return null;
+  return { element: hit.element, info: hit.info };
+}
+
+function isDestructive(name: string, role: string): boolean {
+  return DESTRUCTIVE_PATTERN.test(name) || (role === 'button' && /submit/i.test(name));
+}
+
+function submitForm(field: HTMLInputElement | HTMLTextAreaElement): void {
+  if (field.form) {
+    field.form.requestSubmit();
+    return;
+  }
+  field.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }),
+  );
+}
+
+function scrollToTarget(to: ScrollTarget): void {
+  if (to === 'top') {
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  } else if (to === 'bottom') {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' as ScrollBehavior });
+  } else if (to === 'up') {
+    window.scrollBy({ top: -window.innerHeight * 0.8, behavior: 'instant' as ScrollBehavior });
+  } else {
+    window.scrollBy({ top: window.innerHeight * 0.8, behavior: 'instant' as ScrollBehavior });
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => window.setTimeout(resolvePromise, ms));
 }
 
 function refreshTable(): void {
