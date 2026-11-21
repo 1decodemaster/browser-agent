@@ -26,7 +26,13 @@ interface AgentState {
   status: 'idle' | 'running' | 'finished';
   narration: string[];
   debug?: boolean;
+  memory?: string;
+  nextEffort?: AgentEffort;
 }
+
+type AgentEffort = 'low' | 'medium' | 'high' | 'off' | 'default';
+const EFFORT_VALUES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'off', 'default']);
+const MEMORY_MAX_CHARS = 1200;
 
 interface RunHandle {
   stop: boolean;
@@ -35,14 +41,34 @@ interface RunHandle {
 
 const activeRuns = new Map<number, RunHandle>();
 
-const AGENT_SYSTEM = [
+const AGENT_SYSTEM_LINES = [
   'You are Browser Agent, an autonomous assistant operating the user\'s web page through a numbered element index.',
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
   'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
   'Before setting a value, check whether the index already shows the desired state (e.g. a button or chip already labeled with the target date, city, or passenger count) - if it does, act on that element instead of re-entering the value.',
   'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
-].join('\n');
+];
+
+const SCHEMA_V1 = '{"v":1,"thought":"short reasoning","actions":[...]}';
+const SCHEMA_V2 =
+  '{"v":2,"thought":"short reasoning","memory":"updated working notes","effort":"low|medium|high|off|default","actions":[...]}';
+const MEMORY_RULES = [
+  'memory: rewrite your working notes each step - what the goal needs, how this page is structured, what you already tried and what failed, and the plan for the next steps. Update, prune, never append endlessly; keep it under 600 characters. Omit the field to keep your previous notes unchanged.',
+  'effort: the reasoning effort for your NEXT step. "low" for single mechanical actions you are sure about (click a visible button, fill one field), "medium" for a normal step, "high" only when the page contradicted your plan and you need to rethink, "off" only for a single trivial action you are fully confident about, "default" to keep the configured effort.',
+].join(' ');
+
+function agentSystem(memoryEnabled: boolean, extraInstructions: string): string {
+  const lines = [...AGENT_SYSTEM_LINES];
+  lines[2] = memoryEnabled ? SCHEMA_V2 : SCHEMA_V1;
+  if (memoryEnabled) {
+    lines.push(MEMORY_RULES);
+  }
+  if (extraInstructions) {
+    lines.push('Additional instructions from the user:', extraInstructions);
+  }
+  return lines.join('\n');
+}
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
   await resumeAgentIfStale(tabId);
@@ -132,6 +158,7 @@ function notify(tabId: number, message: ChatPortMessage): void {
 async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   const state = await loadState(tabId);
   if (!state) return;
+  const memoryEnabled = (await getSettings()).agentWorkingMemory === true;
   acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
@@ -162,7 +189,12 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           ? `WARNING: clicking [${lastPrimaryTarget}] ${repeatCount + 1} times in a row has not changed the page (still on ${lastUrl}). Choose a DIFFERENT element or a different strategy.`
           : null;
 
-      let parsed: { thought: string; actions: ActionOp[] } | null = null;
+      let parsed: {
+        thought: string;
+        actions: ActionOp[];
+        memory?: string;
+        effort?: string;
+      } | null = null;
       let lastError = '';
       let prevTimedOut = false;
       let timedOut = false;
@@ -203,6 +235,23 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           ? `LLM request timed out twice in a row (model too slow for this step) - run aborted. Last error: ${lastError}`
           : `Model did not return valid actions: ${lastError}`;
         break;
+      }
+      if (memoryEnabled) {
+        if (typeof parsed.memory === 'string') {
+          state.memory = parsed.memory.trim().slice(0, MEMORY_MAX_CHARS);
+        }
+        if (parsed.effort && EFFORT_VALUES.has(parsed.effort)) {
+          state.nextEffort = parsed.effort as AgentEffort;
+        }
+        if (parsed.memory !== undefined) {
+          details.push(`memory: ${state.memory || '(cleared)'}`);
+          console.info(`[agent] tab=${tabId} memory=${JSON.stringify(state.memory)}`);
+        }
+        if (parsed.effort !== undefined) {
+          details.push(
+            `next effort: ${EFFORT_VALUES.has(parsed.effort) ? parsed.effort : `${parsed.effort} (ignored)`}`,
+          );
+        }
       }
       if (run.stop) {
         summary = 'Stopped by user.';
@@ -315,13 +364,14 @@ async function synthesizeAnswer(state: AgentState): Promise<string> {
   if (!settings.endpointUrl) return '';
   const base = normalizeEndpoint(settings.endpointUrl);
   const transcript = state.narration.join('\n');
+  const memory = state.memory ? `\n\nAgent working notes:\n${state.memory}` : '';
   const messages: ApiMessage[] = [
     {
       role: 'system',
       content:
         'You are Browser Agent. An autonomous agent run just tried to accomplish the user goal on web pages. Write the final response to the user: answer the original question from the transcript if the information was found (mention which page it came from), otherwise summarize what was accomplished and what blocked progress. Be concise.',
     },
-    { role: 'user', content: `Goal: ${state.goal}\n\nAgent transcript:\n${transcript}` },
+    { role: 'user', content: `Goal: ${state.goal}\n\nAgent transcript:\n${transcript}${memory}` },
   ];
   return streamChat({
     base,
@@ -391,18 +441,24 @@ async function completeOnce(
   const endpoint = settings.actEndpointUrl?.trim() || settings.endpointUrl;
   const model = settings.actModel?.trim() || settings.model;
   if (!endpoint) throw new Error('No endpoint configured - set it in the Options page.');
-  const effort = settings.actReasoningEffort?.trim();
+  const memoryEnabled = settings.agentWorkingMemory === true;
 
   const base = normalizeEndpoint(endpoint);
-  const system = settings.actExtraInstructions?.trim()
-    ? `${AGENT_SYSTEM}\n\nAdditional instructions from the user:\n${settings.actExtraInstructions.trim()}`
-    : AGENT_SYSTEM;
+  const system = agentSystem(memoryEnabled, settings.actExtraInstructions?.trim() ?? '');
+
+  const memorySection =
+    memoryEnabled && state.memory
+      ? [
+          `Working notes from your previous steps (rewrite them in your reply, 600 chars max):\n${state.memory}`,
+        ]
+      : [];
 
   const transcript = state.narration.slice(-6).join('\n');
   const userContent = [
     `Goal: ${state.goal}`,
     `Step ${state.step} of ${MAX_STEPS}`,
     `Page: ${observation.title} (${observation.url})`,
+    ...memorySection,
     '',
     'Element index:',
     observation.index,
@@ -418,6 +474,17 @@ async function completeOnce(
     { role: 'user', content: userContent },
   ];
 
+  const configuredEffort = settings.actReasoningEffort?.trim();
+  let extraBody: Record<string, unknown> | undefined;
+  if (memoryEnabled && state.nextEffort && state.nextEffort !== 'default') {
+    extraBody =
+      state.nextEffort === 'off'
+        ? { chat_template_kwargs: { enable_thinking: false } }
+        : { reasoning_effort: state.nextEffort };
+  } else if (configuredEffort) {
+    extraBody = { reasoning_effort: configuredEffort };
+  }
+
   return streamChat({
     base,
     apiKey: settings.apiKey,
@@ -426,11 +493,16 @@ async function completeOnce(
     signal,
     firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
     totalTimeoutMs: settings.llmTotalTimeoutMs,
-    extraBody: effort ? { reasoning_effort: effort } : undefined,
+    extraBody,
   });
 }
 
-function parseActionResponse(raw: string): { thought: string; actions: ActionOp[] } {
+function parseActionResponse(raw: string): {
+  thought: string;
+  actions: ActionOp[];
+  memory?: string;
+  effort?: string;
+} {
   let text = raw.trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) text = fenced[1].trim();
@@ -440,13 +512,20 @@ function parseActionResponse(raw: string): { thought: string; actions: ActionOp[
   const parsed = JSON.parse(text.slice(start, end + 1)) as {
     thought?: unknown;
     actions?: unknown;
+    memory?: unknown;
+    effort?: unknown;
   };
   if (!Array.isArray(parsed.actions)) throw new Error('missing actions array');
   const actions = parsed.actions
     .map(coerceAction)
     .filter((action): action is ActionOp => action != null);
   if (!actions.length) throw new Error('no valid actions');
-  return { thought: typeof parsed.thought === 'string' ? parsed.thought : '', actions };
+  return {
+    thought: typeof parsed.thought === 'string' ? parsed.thought : '',
+    actions,
+    memory: typeof parsed.memory === 'string' ? parsed.memory : undefined,
+    effort: typeof parsed.effort === 'string' ? parsed.effort.toLowerCase() : undefined,
+  };
 }
 
 const KNOWN_OPS = new Set(['click', 'type', 'scroll', 'extract', 'navigate', 'wait', 'done']);

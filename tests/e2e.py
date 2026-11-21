@@ -258,6 +258,8 @@ def run_tests():
             t3_full_agent_run(h)
             t4_timeouts(h)
             t5_batch_stop_on_navigation(h)
+            t6_working_memory(h)
+            t7_memory_flag_off(h)
         finally:
             h.context.close()
 
@@ -428,6 +430,70 @@ def t5_batch_stop_on_navigation(h):
           not obs2[1]['ok'] and 'skipped' in (obs2[1]['message'] or ''), str(obs2[1]))
     time.sleep(1)
     h.wait_ready()
+
+
+MOCK_DEBUG = 'http://127.0.0.1:8902'
+
+
+def t6_working_memory(h):
+    print('\nT6: working memory + self-managed effort (flag ON)')
+    goal = 'Search for flights from DEL to SFO for Dec 24'
+    h.set_settings(model='memsched', actReasoningEffort='high', agentWorkingMemory=True)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=90)
+    narration = '\n'.join(state.get('narration', []))
+    check('t6 run finished without error', 'Error' not in narration, narration[-300:])
+    check('t6 settings effort used on step 1 (fallback)', 'recv_eff=high' in narration,
+          narration[:500])
+    check('t6 memory injected + effort forwarded on step 2',
+          'recv_mem=MEM-A tail=N over=N recv_eff=medium' in narration, narration[:700])
+    check('t6 rewritten memory carried to step 3',
+          'recv_mem=MEM-B tail=N over=N recv_eff=low' in narration, narration[:900])
+    check('t6 long memory truncated + junk effort ignored',
+          'tail=Y over=N recv_eff=low' in narration, narration)
+    check('t6 overflow marker absent', 'TRUNC-OVERFLOW' not in narration)
+    check('t6 effort off disables thinking on the next call',
+          'recv_mem=MEM-C tail=N over=N recv_eff=off' in narration, narration)
+    results = h.page.evaluate("document.querySelector('#results')?.textContent || ''")
+    check('t6 run completed the search', '8 flights found' in results, repr(results))
+    h.disable_act()
+
+
+def t7_memory_flag_off(h):
+    print('\nT7: working memory flag OFF -> classic behavior')
+    goal = 'Search for flights from DEL to SFO for Dec 24'
+    h.set_settings(model='scripted', actReasoningEffort='', agentWorkingMemory=False)
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=90)
+    narration = '\n'.join(state.get('narration', []))
+    check('t7 run finished without error', 'Error' not in narration, narration[-400:])
+    check('t7 no memory echoes in narration', 'recv_mem=' not in narration)
+    records = json.load(urllib.request.urlopen(
+        MOCK_DEBUG + '/debug/requests?model=scripted', timeout=5))
+    steps = [record for record in records if record.get('step')]
+    check('t7 step requests recorded', len(steps) >= 4,
+          f'records={len(records)} narration_lines={len(state.get("narration", []))} '
+          f'first={state.get("narration", ["-"])[0][:120]}')
+    check('t7 no memory section in any prompt',
+          all(not record['has_memory_section'] for record in steps))
+    check('t7 no reasoning_effort sent', all(record['reasoning_effort'] is None for record in steps))
+    check('t7 no thinking overrides sent',
+          all(record['enable_thinking'] is None for record in steps))
 
 
 def t4_timeouts(h):

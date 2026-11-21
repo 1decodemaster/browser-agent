@@ -6,6 +6,33 @@
 
 ## Current status
 
+- **Extension version:** 0.14.0 (experimental agent working memory + self-managed reasoning
+  effort; default OFF). A4 (vision grounding) still next.
+- **v0.14.0 — agent working memory + self-managed reasoning effort (experimental, default off)**:
+  - Flag `agentWorkingMemory` (Options → Act mode, off by default). Off = byte-identical v0.13.1
+    behavior. All work on the `fix/issue-1-kayak-dropdown-timeout` branch, unmerged.
+  - **Response schema v2** (only when the flag is on): `{"v":2,"thought","memory","effort","actions"}`
+    — parser stays tolerant of v1 replies (missing fields = no change).
+  - **Working memory**: the model rewrites short working notes each step (goal interpretation,
+    page model, what failed, plan; ≤600 chars guidance, 1200 hard cap). Stored per-run in agent
+    state and re-injected into the next step's user prompt above the element index
+    ("Working notes from your previous steps…"). Omitting the field keeps the previous notes.
+  - **Self-managed effort**: `effort` returned at step N is forwarded as `reasoning_effort` at
+    step N+1; `off` maps to `chat_template_kwargs:{enable_thinking:false}` (no reasoning_effort;
+    harmless no-op on templates that ignore it); `default`/omitted/junk falls back to the
+    configured `actReasoningEffort` setting. First step uses the setting.
+  - **System prompt** built per-run: v2 schema + memory/effort rules only when enabled (keeps the
+    static block prefix-cache friendly; unchanged bytes when off).
+  - **Visibility**: memory/effort shown in the panel only with `debug` ON (in per-step details) and
+    always logged to the SW console (`[agent] tab=N memory=…`); memory is also fed to
+    `synthesizeAnswer` for better final summaries.
+  - **E2E**: mock model `memsched` returns scheduled memory/effort and echoes what it RECEIVED
+    (memory marker, truncation markers, received effort) in `thought` — T6 asserts injection,
+    rewrite-carry, effort forwarding, `off`→thinking-disabled, junk-effort ignored, 1200-char
+    truncation; T7 asserts flag OFF sends no memory section / no reasoning_effort / no thinking
+    overrides (via mock `/debug/requests` records). Suite at 52/52.
+  - Harness note: the agent prompt uses `filter(Boolean)` so blank-line separators collapse — the
+    memory section sits directly above `Element index:` with single newlines.
 - **Extension version:** 0.13.1 (issue #1 follow-ups from the first real-Kayak retest).
 - **v0.13.1 — real-Kayak retest findings** (batched observations lost on navigation + trip-type
   dropdown still missed):

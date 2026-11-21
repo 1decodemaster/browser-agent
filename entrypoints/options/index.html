@@ -216,6 +216,15 @@
           Extra instructions for the agent
           <textarea id="actExtraInstructions" rows="3" placeholder="Appended to the agent system prompt"></textarea>
         </label>
+        <label class="checkbox">
+          <input id="agentWorkingMemory" type="checkbox" />
+          Experimental: agent working memory + self-managed reasoning effort
+        </label>
+        <p class="note">
+          When on, the agent keeps short working notes across steps (re-injected each turn) and picks the
+          reasoning effort for its next step (low/medium/high; "off" disables thinking via
+          <code>chat_template_kwargs</code> where the server supports it). When off, behavior is unchanged.
+        </p>
         <p class="note">
           <code>reasoning_effort</code> is sent only when set; servers that don't support it may reject the request - if
           act calls fail with HTTP 400, set it back to Default.

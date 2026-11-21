@@ -9,19 +9,42 @@ Behaviors are selected via the model name in the request:
                           scripted (first-token timeout probe).
   dribble-<seconds>     - send the first chunk immediately, then stream the rest
                           over <seconds> (total-timeout probe).
+  memsched              - working-memory schedule: returns per-request `memory`
+                          and `effort` fields and echoes what it RECEIVED
+                          (memory marker + reasoning_effort / thinking flag)
+                          in `thought`, making the loop observable in narration.
 
-Endpoint: POST /v1/chat/completions (SSE stream), GET /v1/models.
+Debug: GET /debug/requests?model=<name> - recorded request facts;
+       GET /debug/reset - clear records.
 """
 import json
 import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8902
 
+LONG_MEMORY = 'MEM-TRUNC: ' + 'x' * 1150 + 'TRUNC-TAIL' + 'y' * 40 + 'TRUNC-OVERFLOW'
 
-def scripted_reply(prompt: str) -> str:
+MEMORY_SCHEDULE = [
+    {'memory': 'MEM-A: goal needs DEL to SFO one-way Dec 24; origin works with type+wait+submit',
+     'effort': 'medium'},
+    {'memory': 'MEM-B: dest suggestions open on input; pick from Recently appeared',
+     'effort': 'low'},
+    {'memory': LONG_MEMORY,
+     'effort': 'banana'},
+    {'memory': 'MEM-C: search submitted, expect results page',
+     'effort': 'off'},
+    {'memory': 'MEM-D: final step', 'effort': 'high'},
+    {'memory': 'MEM-E: spare', 'effort': 'medium'},
+]
+
+RECORDS = {}
+
+
+def scripted_actions(prompt: str) -> list:
     entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
     entries = [(int(eid), role, name) for eid, role, name in entries]
 
@@ -77,7 +100,40 @@ def scripted_reply(prompt: str) -> str:
     else:
         actions = [{'op': 'wait', 'ms': 500}]
         thought = 'nothing actionable yet, wait'
-    return json.dumps({'v': 1, 'thought': thought, 'actions': actions})
+    return actions, thought
+
+
+def is_agent_step(prompt: str) -> bool:
+    return 'Element index:' in prompt
+
+
+def received_memory(prompt: str) -> str:
+    match = re.search(r'Working notes[^\n]*:\n(.*?)\n+Element index:', prompt, re.S)
+    return match.group(1) if match else ''
+
+
+def memsched_reply(payload, prompt: str):
+    if not is_agent_step(prompt):
+        return json.dumps({'answer': 'Run completed.'}), 'plain'
+    records = RECORDS.setdefault('memsched', [])
+    step_index = sum(1 for record in records if record.get('step'))
+    schedule = MEMORY_SCHEDULE[min(step_index, len(MEMORY_SCHEDULE) - 1)]
+    received = received_memory(prompt)
+    marker = received[:5] if received else 'none'
+    tail = 'Y' if 'TRUNC-TAIL' in received else 'N'
+    over = 'Y' if 'TRUNC-OVERFLOW' in received else 'N'
+    effort = payload.get('reasoning_effort')
+    thinking_off = (payload.get('chat_template_kwargs') or {}).get('enable_thinking') is False
+    recv_eff = 'off' if thinking_off else (effort if effort else 'none')
+    actions, _ = scripted_actions(prompt)
+    thought = f'recv_mem={marker} tail={tail} over={over} recv_eff={recv_eff}'
+    return json.dumps({
+        'v': 2,
+        'thought': thought,
+        'memory': schedule['memory'],
+        'effort': schedule['effort'],
+        'actions': actions,
+    }), 'json'
 
 
 def last_user_content(messages):
@@ -100,8 +156,25 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write('[mock-llm] %s\n' % (fmt % args))
 
     def do_GET(self):
-        if self.path.startswith('/v1/models'):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith('/v1/models'):
             body = json.dumps({'data': [{'id': 'scripted'}, {'id': 'delay-first-6'}, {'id': 'dribble-9'}]})
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body.encode())
+        elif parsed.path.startswith('/debug/requests'):
+            model = parse_qs(parsed.query).get('model', [''])[0]
+            body = json.dumps(RECORDS.get(model, []))
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body.encode())
+        elif parsed.path.startswith('/debug/reset'):
+            RECORDS.clear()
+            body = '{}'
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
@@ -118,9 +191,17 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length) or b'{}')
         model = payload.get('model', 'scripted')
         prompt = last_user_content(payload.get('messages', []))
-        reply = scripted_reply(prompt)
-        delay_first = re.fullmatch(r'delay-first-(\d+)', model)
-        dribble = re.fullmatch(r'dribble-(\d+)', model)
+        reply, kind = self.build_reply(payload, prompt, model)
+        records = RECORDS.setdefault(model, [])
+        records.append({
+            'step': is_agent_step(prompt),
+            'reasoning_effort': payload.get('reasoning_effort'),
+            'enable_thinking': (payload.get('chat_template_kwargs') or {}).get('enable_thinking'),
+            'has_memory_section': 'Working notes' in prompt,
+            'memory_head': received_memory(prompt)[:12],
+            'kind': kind,
+        })
+        del records[:-60]
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -132,6 +213,9 @@ class Handler(BaseHTTPRequestHandler):
             chunk = json.dumps({'choices': [{'delta': {'content': text}}]})
             self.wfile.write(f'data: {chunk}\n\n'.encode())
             self.wfile.flush()
+
+        delay_first = re.fullmatch(r'delay-first-(\d+)', model)
+        dribble = re.fullmatch(r'dribble-(\d+)', model)
 
         try:
             if delay_first:
@@ -153,6 +237,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def build_reply(self, payload, prompt, model):
+        if model == 'memsched':
+            return memsched_reply(payload, prompt)
+        if is_agent_step(prompt):
+            actions, thought = scripted_actions(prompt)
+            return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
+        return json.dumps({'answer': 'Run completed.'}), 'plain'
 
 
 if __name__ == '__main__':

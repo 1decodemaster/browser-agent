@@ -11,6 +11,7 @@ export interface Settings {
   actExtraInstructions?: string;
   llmFirstTokenTimeoutMs?: number;
   llmTotalTimeoutMs?: number;
+  agentWorkingMemory?: boolean;
   sttEndpointUrl?: string;
   sttModel?: string;
   ttsAutoRead?: boolean;
