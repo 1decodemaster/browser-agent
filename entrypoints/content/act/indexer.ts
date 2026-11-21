@@ -77,38 +77,38 @@ export class ElementTable {
   }
 }
 
-export function buildElementTable(fresh?: ReadonlySet<Element>): ElementTable {
+export function buildElementTable(previous?: ElementTable | null): ElementTable {
   const table = new ElementTable();
   const body = document.body;
-  if (body) visit(table, body, fresh, false);
+  if (body) visit(table, body, previous);
   return table;
 }
 
 function visit(
   table: ElementTable,
   element: Element,
-  fresh: ReadonlySet<Element> | undefined,
-  inheritedFresh: boolean,
+  previous: ElementTable | null | undefined,
 ): void {
   const tag = element.tagName.toLowerCase();
   if (SKIP_TAGS.has(tag)) return;
   if (element.id && HOST_IDS.has(element.id)) return;
 
-  const isFresh = inheritedFresh || (fresh != null && fresh.has(element));
-
   const shadowRoot = (element as HTMLElement).shadowRoot;
   if (shadowRoot) {
-    for (const child of Array.from(shadowRoot.children)) visit(table, child, fresh, isFresh);
+    for (const child of Array.from(shadowRoot.children)) visit(table, child, previous);
   }
 
   const interactive = isInteractive(element, tag);
   const content = CONTENT_TAGS.has(tag);
   if ((interactive || content) && isVisible(element)) {
     const name = accessibleName(element, tag);
+    const prevId = previous?.idFor(element);
+    const isFresh =
+      previous != null && (prevId === undefined || previous.info.get(prevId)?.fresh === true);
     table.add(element, tag, interactive ? 'interactive' : 'content', name, isFresh);
   }
 
-  for (const child of Array.from(element.children)) visit(table, child, fresh, isFresh);
+  for (const child of Array.from(element.children)) visit(table, child, previous);
 }
 
 const INTERACTIVE_ROLES = [
@@ -233,7 +233,7 @@ export function serializeTable(table: ElementTable, maxEntries = 280): string {
   const cap = maxEntries + freshShown.length;
   if (freshShown.length) {
     picked.unshift(
-      'Recently appeared (new since the last step - dropdown/popover options you just opened are here):',
+      'Recently appeared (dropdown/popover options you just opened are listed here - click a matching row):',
       ...freshShown,
     );
   }

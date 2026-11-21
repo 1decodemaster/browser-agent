@@ -6,6 +6,27 @@
 
 ## Current status
 
+- **Extension version:** 0.13.1 (issue #1 follow-ups from the first real-Kayak retest).
+- **v0.13.1 — real-Kayak retest findings** (batched observations lost on navigation + trip-type
+  dropdown still missed):
+  - **Freshness rewritten as a diff against the last observed table** (replaces the
+    mutation-recorded set): an element is fresh when it is absent from the previous table
+    (new node, or was invisible/filtered) **or was already fresh** (sticky - stays pinned while
+    it remains present, so an open dropdown stays clickable across steps; gone once closed).
+    Catches Kayak-style pre-rendered popups toggled visible on a container anywhere in the DOM,
+    which the mutation-target approach missed. First working version had a bug: inheritance from
+    non-indexable ancestors (never in the previous WeakMap) marked EVERYTHING fresh - freshness
+    is now per-element only, no inheritance.
+  - **Action batches stop-and-report when the page starts navigating** (`executeActions`): after
+    a `navigate` op, an anchor click (deferred 50ms), or a click/type+submit that the Navigation
+    API reports as a cross-document navigation, remaining actions in the batch are returned as
+    `ok:false - "skipped - the page is navigating; observe the new page next"` instead of the
+    whole batch's RPC response dying with "message channel closed" (the observed
+    `navigate → failed` / `wait → failed` on real Kayak). `wait` polls `navigation` and cuts
+    itself short when navigation starts. The agent-side fallback message for a lost channel is
+    now "the page navigated or reloaded before the actions finished reporting - observe the new
+    page state before retrying".
+  - E2E: T5 covers the batch-stop semantics (anchor click + navigate followed by wait/extract).
 - **Extension version:** 0.13.0 (issue #1 fixes: portal dropdowns in the index, LLM timeout
   rework, post-submit verification). A4 (vision grounding) still next.
 - **v0.13.0 — issue #1 (Kayak flight search: dropdowns never indexed, `signal timed out` death)**:

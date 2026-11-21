@@ -368,11 +368,15 @@ async function executeOnContent(
       tabId,
     );
   } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    const message = /message channel closed|Receiving end does not exist/i.test(raw)
+      ? 'the page navigated or reloaded before the actions finished reporting - observe the new page state before retrying'
+      : raw;
     return actions.map((action) => ({
       ok: false,
       op: action.op,
       target: 'target' in action ? action.target : undefined,
-      message: error instanceof Error ? error.message : String(error),
+      message,
     }));
   }
 }

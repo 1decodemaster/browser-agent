@@ -257,6 +257,7 @@ def run_tests():
             t2_indexer_and_post_submit(h)
             t3_full_agent_run(h)
             t4_timeouts(h)
+            t5_batch_stop_on_navigation(h)
         finally:
             h.context.close()
 
@@ -391,6 +392,42 @@ def t3_full_agent_run(h):
     check('t3 summary mentions flights', 'flights' in (state.get('narration')[-1] or '').lower(),
           state.get('narration', ['-'])[-1])
     h.disable_act()
+
+
+def t5_batch_stop_on_navigation(h):
+    print('\nT5: action batches stop-and-report when the page starts navigating')
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    base = h.observe()
+    link_id = None
+    for line in base['index'].splitlines():
+        if 'Deal to City 3' in line:
+            link_id = int(line.split(']')[0].strip('['))
+            break
+    check('t5 deal link indexed', link_id is not None)
+    obs = h.rpc({'kind': 'act:execute',
+                 'actions': [{'op': 'click', 'target': link_id},
+                             {'op': 'wait', 'ms': 2000},
+                             {'op': 'extract'}],
+                 'confirmMode': 'never'})
+    check('t5 anchor click ok', obs[0]['ok'], str(obs[0]))
+    check('t5 wait after anchor click skipped',
+          len(obs) == 3 and not obs[1]['ok'] and 'skipped' in (obs[1]['message'] or ''), str(obs[1]))
+    check('t5 extract after anchor click skipped',
+          not obs[2]['ok'] and 'skipped' in (obs[2]['message'] or ''), str(obs[2]))
+    # navigate + wait: the response must escape before the deferred navigation
+    obs2 = h.rpc({'kind': 'act:execute',
+                  'actions': [{'op': 'navigate', 'url': FIXTURE_URL + '?nav=1'},
+                              {'op': 'wait', 'ms': 2000}],
+                  'confirmMode': 'never'})
+    check('t5 navigate ok', obs2[0]['ok'], str(obs2[0]))
+    check('t5 wait after navigate skipped',
+          not obs2[1]['ok'] and 'skipped' in (obs2[1]['message'] or ''), str(obs2[1]))
+    time.sleep(1)
+    h.wait_ready()
 
 
 def t4_timeouts(h):

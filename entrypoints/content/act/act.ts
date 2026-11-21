@@ -20,14 +20,16 @@ let rebuildTimer: number | undefined;
 let hoverRaf = 0;
 let lastPointer = { x: 0, y: 0 };
 let savedBodyCursor: string | null = null;
+let navigationWatched = false;
+let crossDocumentNavStarted = false;
+let navigationPending = false;
 const changeCallbacks: Array<(active: boolean) => void> = [];
-const freshElements = new Set<Element>();
-const FRESH_ELEMENT_LIMIT = 500;
 
 export function mountAct(css: string): void {
   if (document.getElementById(ACT_HOST_ID) != null) return;
   spotlight = mountSpotlight(css);
   loadActUi();
+  watchNavigation();
 }
 
 export function isAskFirst(): boolean {
@@ -71,7 +73,6 @@ export function setActMode(on: boolean): void {
   } else {
     stopListeners();
     pinned = null;
-    freshElements.clear();
     spotlight.setActive(false);
     if (savedBodyCursor != null) {
       document.body.style.cursor = savedBodyCursor;
@@ -92,8 +93,7 @@ export function serializeIndex(): string | null {
 }
 
 export function observePage(): { index: string; url: string; title: string } {
-  table = buildElementTable(freshElements.size ? new Set(freshElements) : undefined);
-  freshElements.clear();
+  table = buildElementTable(pinnedTable);
   pinnedTable = table;
   tableDirty = false;
   return { index: serializeTable(table), url: location.href, title: document.title };
@@ -106,15 +106,53 @@ export async function executeActions(
   actions: ActionOp[],
   confirmMode: ConfirmMode = 'destructive',
 ): Promise<ActionObservation[]> {
-  const observations: ActionObservation[] = [];
   if (!spotlight) {
     return actions.map((action) => ({ ok: false, op: action.op, message: 'Spotlight not mounted' }));
   }
   const current = pinnedTable ?? ensureFreshTable();
-  for (const action of actions) {
-    observations.push(await runAction(action, current, confirmMode));
+  const observations: ActionObservation[] = [];
+  for (let index = 0; index < actions.length; index++) {
+    const action = actions[index]!;
+    crossDocumentNavStarted = false;
+    navigationPending = false;
+    const observation = await runAction(action, current, confirmMode);
+    observations.push(observation);
+    let navigating = action.op === 'navigate' || navigationPending;
+    if (!navigating && (action.op === 'click' || (action.op === 'type' && action.submit === true))) {
+      await abortableDelay(40);
+      navigating = crossDocumentNavStarted;
+    }
+    if (navigating && index < actions.length - 1) {
+      for (const skipped of actions.slice(index + 1)) {
+        observations.push({
+          ok: false,
+          op: skipped.op,
+          target: 'target' in skipped ? skipped.target : undefined,
+          message: 'skipped - the page is navigating; observe the new page next',
+        });
+      }
+      break;
+    }
   }
   return observations;
+}
+
+function watchNavigation(): void {
+  if (navigationWatched) return;
+  navigationWatched = true;
+  interface NavigationLike {
+    addEventListener(
+      type: 'navigate',
+      listener: (event: { hashChange?: boolean; destination?: { sameDocument?: boolean } }) => void,
+    ): void;
+  }
+  const nav = (window as { navigation?: NavigationLike }).navigation;
+  if (!nav || typeof nav.addEventListener !== 'function') return;
+  nav.addEventListener('navigate', (event) => {
+    if (event.hashChange) return;
+    if (event.destination?.sameDocument) return;
+    crossDocumentNavStarted = true;
+  });
 }
 
 async function runAction(
@@ -150,6 +188,7 @@ async function runAction(
         }
         sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
         if (found.href) {
+          navigationPending = true;
           window.setTimeout(() => clickElement(found.target), 50);
         } else {
           clickElement(found.target);
@@ -251,8 +290,15 @@ async function runAction(
         return { ...base, ok: true, message: action.url };
       }
       case 'wait': {
-        await delay(Math.min(Math.max(action.ms, 0), 5000));
-        return { ...base, ok: true, message: `${Math.min(action.ms, 5000)}ms` };
+        const requested = Math.min(Math.max(action.ms, 0), 5000);
+        const waited = await abortableDelay(requested);
+        const cutShort = waited < requested;
+        if (cutShort) navigationPending = true;
+        return {
+          ...base,
+          ok: true,
+          message: `${waited}ms${cutShort ? ' (cut short - page is navigating)' : ''}`,
+        };
       }
       case 'done': {
         return { ...base, ok: true, message: action.summary };
@@ -325,7 +371,7 @@ async function describePostSubmit(
   typed: string,
   anchors: HTMLElement[],
 ): Promise<string> {
-  await delay(POST_SUBMIT_READ_MS);
+  await abortableDelay(POST_SUBMIT_READ_MS);
   try {
     const parts: string[] = [];
     if (!field.isConnected) {
@@ -394,8 +440,20 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolvePromise) => window.setTimeout(resolvePromise, ms));
 }
 
+async function abortableDelay(ms: number): Promise<number> {
+  const step = 50;
+  let waited = 0;
+  while (waited < ms) {
+    if (crossDocumentNavStarted) break;
+    const slice = Math.min(step, ms - waited);
+    await delay(slice);
+    waited += slice;
+  }
+  return waited;
+}
+
 function refreshTable(): void {
-  table = buildElementTable(freshElements.size ? new Set(freshElements) : undefined);
+  table = buildElementTable(table);
   tableDirty = false;
 }
 
@@ -436,8 +494,7 @@ function startListeners(): void {
   document.addEventListener('click', onCaptureClick, true);
   document.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('scroll', onScroll, true);
-  observer = new MutationObserver((mutations) => {
-    recordFreshMutations(mutations);
+  observer = new MutationObserver(() => {
     tableDirty = true;
     if (rebuildTimer !== undefined) window.clearTimeout(rebuildTimer);
     rebuildTimer = window.setTimeout(() => {
@@ -464,35 +521,6 @@ function stopListeners(): void {
   if (hoverRaf) {
     cancelAnimationFrame(hoverRaf);
     hoverRaf = 0;
-  }
-}
-
-function recordFreshMutations(mutations: MutationRecord[]): void {
-  for (const mutation of mutations) {
-    if (mutation.type === 'childList') {
-      for (const node of mutation.addedNodes) {
-        if (node instanceof Element && !isOwnHost(node)) rememberFresh(node);
-      }
-    } else if (mutation.type === 'attributes') {
-      if (
-        mutation.target instanceof Element &&
-        !isOwnHost(mutation.target) &&
-        mutation.target !== document.body &&
-        mutation.target !== document.documentElement
-      ) {
-        rememberFresh(mutation.target);
-      }
-    }
-  }
-}
-
-function rememberFresh(element: Element): void {
-  if (freshElements.has(element)) return;
-  freshElements.add(element);
-  while (freshElements.size > FRESH_ELEMENT_LIMIT) {
-    const oldest = freshElements.values().next().value;
-    if (oldest === undefined) break;
-    freshElements.delete(oldest);
   }
 }
 
