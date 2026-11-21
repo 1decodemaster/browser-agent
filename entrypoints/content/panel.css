@@ -376,30 +376,32 @@
 }
 
 .ba-send:disabled,
-.ba-embed:disabled {
+.ba-camera:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-.ba-embed-row {
+.ba-camera {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   display: flex;
-  gap: 8px;
-  padding: 0 12px 10px;
-}
-
-.ba-embed {
-  flex: 1;
-  font: inherit;
-  font-size: 12px;
-  padding: 7px 8px;
+  align-items: center;
+  justify-content: center;
   background: #1d2129;
-  color: #c9d1d9;
+  color: #9aa0a6;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   cursor: pointer;
 }
 
-.ba-embed:hover {
+.ba-camera svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ba-camera:hover {
   background: #262b35;
   color: #fff;
 }

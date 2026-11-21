@@ -6,11 +6,25 @@
 
 ## Current status
 
-- **Extension version:** 0.10.0 shipped (SPA widget support: pointer-cursor indexing, field
-  readback, key op). Kayak/MMT retest pending on user's machine; flight booking still imperfect
-  (complex unique pages — accepted for now, move on).
-- **Next phase: C1–C3 (chat context + voice)** — see "Chat context + voice phases" below.
+- **Extension version:** 0.11.0 (C1 auto page context + C2 camera/multi-screenshot). Kayak/MMT
+  retest pending on user's machine; flight booking still imperfect (complex unique pages —
+  accepted for now, move on).
+- **Next phase: C3 (voice: mic STT + TTS)** — see "Chat context + voice phases" below.
   A4 (vision grounding, Wikipedia-hop e2e, chrome.debugger trusted input) deferred until after C3.
+- **v0.11.0**:
+  - **C1 — HTML button removed**; every chat send auto-attaches a fresh page snapshot captured
+    at send time (`collectPageContext()` in dom-context.ts): act indexer outline
+    (`serializeTable(buildElementTable())`) + `extractMainText()` (8k cap); falls back to raw
+    cleaned HTML when both are near-empty (<600 chars). Navigation-safe — always the current DOM.
+  - **Prompt-window policy**: only the LAST message carrying `pageContext` includes it in the
+    LLM prompt (`buildApiMessages`); stored history keeps the last 2 snapshots
+    (`trimStoredContexts`), older ones stripped to bound storage.session growth.
+  - **C2 — camera icon button** (left of composer input) replaces the big "Embed Screenshot"
+    button; each click APPENDS a numbered screenshot chip (`Screenshot 1`, `Screenshot 2`, …).
+    Protocol: `chat.send.screenshots: string[]` / `ChatMessage.images` — one image part per
+    screenshot; all messages keep their images in the prompt (explicit attachments stay).
+  - `ChatMessage.html` renamed → `pageContext` (session-only history; old entries simply lose
+    context). SYSTEM_PROMPT updated (outline attached automatically).
 - v0.10.0 from Kayak/MMT failures (React-handler widgets, unverifiable typing, 120s timeout
   aborting runs):
   - **Cursor:pointer heuristic**: elements with `cursor:pointer` (React/Vue onClick widgets with
@@ -153,17 +167,12 @@
 
 ## Chat context + voice phases (planned)
 
-- [ ] **C1 — Auto page context (v0.11.0)**: remove the "Embed HTML" button entirely; every chat
-  send auto-attaches a fresh snapshot of the current page, captured at send time (navigation-safe
-  — no stale embeds; "if the page navigated, use that HTML"). Snapshot = compact accessible-DOM
-  serialization, not raw innerHTML: reuse the act indexer's `serializeTable()` output
-  (role/name/text lines, ids consistent with Act mode), fallback to `collectPageHtml()` when the
-  table is near-empty. Decide history-bloat policy during implementation (e.g., only keep the
-  last 1–2 snapshots in the prompt window).
-- [ ] **C2 — Camera button + multi-screenshot (v0.11.0)**: replace the big "Embed Screenshot"
-  button with a small camera icon inline in the composer; each click APPENDS a screenshot chip
-  instead of replacing (chips row already supports multiple). Protocol: `screenshotDataUrl` →
-  `screenshots: string[]`; LLM message carries one image part per screenshot.
+- [x] **C1 — Auto page context (v0.11.0)**: done as described above — snapshot at send time,
+  outline + main text with raw-HTML fallback, prompt-window keeps only the newest snapshot,
+  storage keeps the last two.
+- [x] **C2 — Camera button + multi-screenshot (v0.11.0)**: done as described above — small
+  camera icon in the composer, append-only numbered chips, `screenshots: string[]` protocol with
+  one image part per screenshot.
 - [ ] **C3 — Voice (v0.12.0)**: mic button in the composer that fills the input with the
   transcript — works for chat AND Act goals alike (Send stays manual).
   - STT: Web Speech API (`webkitSpeechRecognition`) when available (Chrome); fallback =

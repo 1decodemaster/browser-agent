@@ -2,7 +2,7 @@ import { rpc } from '@/shared/rpc';
 import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/types';
 import type { AgentSummary } from '@/shared/protocol';
 import { chatPost, onChatMessage } from './chat-client';
-import { collectPageHtml } from './dom-context';
+import { collectPageContext } from './dom-context';
 import { renderMarkdown } from './markdown';
 import { isActMode, isAskFirst, onActModeChange, setActMode, setAskFirst, executeActions } from './act/act';
 import { COMMAND_HELP, parseCommand } from './act/commands';
@@ -12,10 +12,8 @@ const UI_KEY = '__ba_ui';
 const MIN_SNAP_WIDTH = 280;
 
 interface Embed {
-  kind: 'html' | 'screenshot';
   label: string;
-  html?: string;
-  screenshotDataUrl?: string;
+  screenshotDataUrl: string;
 }
 
 interface Handles {
@@ -59,6 +57,9 @@ const TRASH_SVG =
 
 const DOWNLOAD_SVG =
   '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8 2v8m0 0L5 7m3 3l3-3M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+const CAMERA_SVG =
+  '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 5h2.3l1.2-1.8h5L11.7 5H14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="9" r="2.1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
 
 export function mountUi(css: string): void {
   if (document.getElementById(HOST_ID) != null) return;
@@ -118,14 +119,10 @@ export function mountUi(css: string): void {
   const chips = document.createElement('div');
   chips.className = 'ba-chips ba-hidden';
 
-  const embedRow = document.createElement('div');
-  embedRow.className = 'ba-embed-row';
-  const embedHtmlButton = embedButton('html', 'Embed HTML', embedHtml);
-  const embedShotButton = embedButton('screenshot', 'Embed Screenshot', embedScreenshot);
-  embedRow.append(embedHtmlButton, embedShotButton);
-
   const inputRow = document.createElement('div');
   inputRow.className = 'ba-input-row';
+  const cameraBtn = iconButton(CAMERA_SVG, 'Attach screenshot', () => void embedScreenshot());
+  cameraBtn.classList.add('ba-camera');
   const input = document.createElement('textarea');
   input.className = 'ba-input';
   input.placeholder = 'Ask about this page…';
@@ -134,12 +131,12 @@ export function mountUi(css: string): void {
   send.className = 'ba-send';
   send.type = 'button';
   send.textContent = 'Send';
-  inputRow.append(input, send);
+  inputRow.append(cameraBtn, input, send);
 
   const resizer = document.createElement('div');
   resizer.className = 'ba-resizer';
 
-  panel.append(header, log, chips, embedRow, inputRow, resizer);
+  panel.append(header, log, chips, inputRow, resizer);
   root.append(pill, panel);
   shadow.append(style, root);
   (document.body ?? document.documentElement).append(host);
@@ -153,7 +150,7 @@ export function mountUi(css: string): void {
     send,
     chips,
     hint,
-    embedButtons: [embedHtmlButton, embedShotButton],
+    embedButtons: [cameraBtn],
     dock,
   };
 
@@ -198,19 +195,6 @@ export function mountUi(css: string): void {
     setSnapped(true);
   } else {
     scheduleHide(2000);
-  }
-
-  function embedButton(
-    kind: 'html' | 'screenshot',
-    label: string,
-    onClick: () => void,
-  ): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.className = 'ba-embed';
-    button.type = 'button';
-    button.textContent = label;
-    button.addEventListener('click', onClick);
-    return button;
   }
 
   function autosize(): void {
@@ -298,18 +282,18 @@ export function mountUi(css: string): void {
       return;
     }
 
-    const htmlEmbed = embeds.find((embed) => embed.kind === 'html');
-    const shotEmbed = embeds.find((embed) => embed.kind === 'screenshot');
-    if (!text && !htmlEmbed && !shotEmbed) return;
+    const shots = embeds;
+    if (!text && shots.length === 0) return;
 
     const requestId = newRequestId();
     activeRequestId = requestId;
     pendingAssistant = null;
     pendingReasoning = null;
 
+    const pageContext = collectPageContext();
     addUserMessage(text || '(page content attached)');
-    if (htmlEmbed) addNote(`HTML attached (${(htmlEmbed.html!.length / 1024).toFixed(1)} kB)`);
-    if (shotEmbed) addNote('Screenshot attached');
+    addNote(`Page context attached (${(pageContext.length / 1024).toFixed(1)} kB)`);
+    if (shots.length) addNote(`${shots.length} screenshot(s) attached`);
 
     embeds = [];
     renderChips();
@@ -321,8 +305,8 @@ export function mountUi(css: string): void {
       type: 'chat.send',
       requestId,
       text: text || 'Here is the page content. Summarize it briefly.',
-      html: htmlEmbed?.html,
-      screenshotDataUrl: shotEmbed?.screenshotDataUrl,
+      pageContext,
+      screenshots: shots.length ? shots.map((embed) => embed.screenshotDataUrl) : undefined,
       url: location.href,
       title: document.title,
     });
@@ -465,24 +449,12 @@ export function mountUi(css: string): void {
     }
   }
 
-  function embedHtml(): void {
-    if (!handles || activeRequestId != null) return;
-    embeds = embeds.filter((embed) => embed.kind !== 'html');
-    const html = collectPageHtml();
-    embeds.push({
-      kind: 'html',
-      label: `HTML · ${(html.length / 1024).toFixed(1)} kB`,
-      html,
-    });
-    renderChips();
-  }
-
   async function embedScreenshot(): Promise<void> {
     if (!handles || activeRequestId != null) return;
     try {
       const { dataUrl } = await rpc<ScreenshotData>({ kind: 'screenshot:capture' });
-      embeds = embeds.filter((embed) => embed.kind !== 'screenshot');
-      embeds.push({ kind: 'screenshot', label: 'Screenshot', screenshotDataUrl: dataUrl });
+      const count = embeds.length + 1;
+      embeds.push({ label: `Screenshot ${count}`, screenshotDataUrl: dataUrl });
       renderChips();
     } catch (error) {
       addNote(`Screenshot failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -518,8 +490,8 @@ export function mountUi(css: string): void {
       for (const message of messages) {
         if (message.role === 'user') {
           addUserMessage(message.text || '(page content attached)');
-          if (message.html) addNote('HTML attached');
-          if (message.images?.length) addNote('Screenshot attached');
+          if (message.pageContext) addNote('Page context attached');
+          if (message.images?.length) addNote(`${message.images.length} screenshot(s) attached`);
         } else {
           addAssistantMessage(message.text);
         }
@@ -606,7 +578,7 @@ function makeHint(): HTMLElement {
   const hint = document.createElement('div');
   hint.className = 'ba-hint';
   hint.textContent =
-    'Send chats about this page (embed HTML/screenshot for context). Agent runs your message as an autonomous goal. Local commands: "click 12", "type "x" into 17", "help".';
+    'Send chats about this page (page context is attached automatically; camera attaches screenshots). Agent runs your message as an autonomous goal. Local commands: "click 12", "type "x" into 17", "help".';
   return hint;
 }
 
@@ -671,11 +643,14 @@ function buildTranscript(messages: ChatMessage[]): string {
   for (const message of messages) {
     lines.push(`## ${message.role === 'user' ? 'User' : 'Assistant'}`, '');
     lines.push(message.text || '_(no text)_');
-    if (message.html) {
-      lines.push('', `_(HTML context attached: ${(message.html.length / 1024).toFixed(1)} kB)_`);
+    if (message.pageContext) {
+      lines.push(
+        '',
+        `_(Page context attached: ${(message.pageContext.length / 1024).toFixed(1)} kB)_`,
+      );
     }
     if (message.images?.length) {
-      lines.push('', '_(Screenshot attached)_');
+      lines.push('', `_(Screenshots attached: ${message.images.length})_`);
     }
     lines.push('');
   }

@@ -16,7 +16,7 @@ export interface ChatMessage {
   text: string;
   url?: string;
   title?: string;
-  html?: string;
+  pageContext?: string;
   images?: string[];
 }
 
@@ -39,8 +39,8 @@ export type ChatPortMessage =
       type: 'chat.send';
       requestId: string;
       text: string;
-      html?: string;
-      screenshotDataUrl?: string;
+      pageContext?: string;
+      screenshots?: string[];
       url: string;
       title: string;
     }

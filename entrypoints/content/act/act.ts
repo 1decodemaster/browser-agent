@@ -592,7 +592,7 @@ function elementText(element: HTMLElement): string {
   return (element.innerText ?? element.textContent ?? '').trim();
 }
 
-function extractMainText(): string {
+export function extractMainText(): string {
   const selectors = ['main', 'article', '[role="main"]', '#content', '#mw-content-text'];
   let best: HTMLElement | null = null;
   let bestLength = 0;

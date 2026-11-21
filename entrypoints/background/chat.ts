@@ -10,7 +10,7 @@ type Port = ReturnType<typeof browser.runtime.connect>;
 type SendRequest = Extract<ChatPortMessage, { type: 'chat.send' }>;
 
 const SYSTEM_PROMPT =
-  'You are Browser Agent, an assistant embedded in the user\'s browser. The user shares page HTML, screenshots, or questions about the page they are viewing. Answer helpfully and concisely, grounding answers in the provided page context. You can only read and answer - you cannot browse, click, or take any action. If the user asks you to act on the page, tell them to turn on Act mode and send their goal as an agent run instead. If the needed context is missing, say so briefly.';
+  'You are Browser Agent, an assistant embedded in the user\'s browser. A DOM outline of the page the user is viewing (interactive elements + main text) is attached to their messages automatically; screenshots may also be attached. Answer helpfully and concisely, grounding answers in the provided page context. You can only read and answer - you cannot browse, click, or take any action. If the user asks you to act on the page, tell them to turn on Act mode and send their goal as an agent run instead. If the needed context is missing, say so briefly.';
 
 const chatKey = (tabId: number) => `session:chat:${tabId}` as const;
 
@@ -91,9 +91,10 @@ async function handleSend(
     text: message.text,
     url: message.url,
     title: message.title,
-    html: message.html,
-    images: message.screenshotDataUrl ? [message.screenshotDataUrl] : undefined,
+    pageContext: message.pageContext,
+    images: message.screenshots?.length ? message.screenshots : undefined,
   });
+  trimStoredContexts(history);
   await saveHistory(tabId, history);
 
   const controller = new AbortController();
@@ -134,18 +135,31 @@ async function handleSend(
   }
 }
 
+const KEEP_STORED_CONTEXTS = 2;
+
+function trimStoredContexts(history: ChatMessage[]): void {
+  const indices = history
+    .map((message, index) => (message.pageContext != null ? index : -1))
+    .filter((index) => index >= 0);
+  for (const index of indices.slice(0, -KEEP_STORED_CONTEXTS)) {
+    delete history[index]!.pageContext;
+  }
+}
+
 function buildApiMessages(history: ChatMessage[]): ApiMessage[] {
   const messages: ApiMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+  const lastContextIndex = findLastIndex(history, (message) => message.pageContext != null);
   history.forEach((message, index) => {
     const isFirst = index === 0;
-    const hasAttachments = message.html != null || (message.images?.length ?? 0) > 0;
+    const hasAttachments = message.pageContext != null || (message.images?.length ?? 0) > 0;
     const includeHeader = isFirst || hasAttachments;
     const header =
       includeHeader && message.url ? `Page: ${message.title || ''} (${message.url})\n\n` : '';
-    const htmlBlock = message.html
-      ? `\n\nPage HTML (may be truncated):\n\`\`\`html\n${message.html}\n\`\`\``
-      : '';
-    const text = `${header}${message.text}${htmlBlock}`;
+    const contextBlock =
+      index === lastContextIndex && message.pageContext
+        ? `\n\nPage context (accessibility outline of interactive elements + main text, may be truncated):\n${message.pageContext}`
+        : '';
+    const text = `${header}${message.text}${contextBlock}`;
     const images = message.images ?? [];
     if (images.length > 0) {
       messages.push({
@@ -160,6 +174,13 @@ function buildApiMessages(history: ChatMessage[]): ApiMessage[] {
     }
   });
   return messages;
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index]!)) return index;
+  }
+  return -1;
 }
 
 function describeError(error: unknown): string {
