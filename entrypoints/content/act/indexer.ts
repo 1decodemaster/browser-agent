@@ -1,3 +1,5 @@
+import { hasPointerCursor } from './executor';
+
 export interface ElementInfo {
   id: number;
   tag: string;
@@ -94,19 +96,32 @@ function visit(table: ElementTable, element: Element): void {
   for (const child of Array.from(element.children)) visit(table, child);
 }
 
+const INTERACTIVE_ROLES = [
+  'button',
+  'link',
+  'tab',
+  'checkbox',
+  'radio',
+  'menuitem',
+  'option',
+  'switch',
+  'textbox',
+  'searchbox',
+  'combobox',
+];
+const WIDGET_HOST_TAGS = new Set(['div', 'span', 'li', 'td', 'th']);
+
 function isInteractive(element: Element, tag: string): boolean {
   if (INTERACTIVE_TAGS.has(tag)) return true;
   if (element.hasAttribute('onclick')) return true;
-  if (element.getAttribute('role')) {
-    const role = element.getAttribute('role')!;
-    return ['button', 'link', 'tab', 'checkbox', 'radio', 'menuitem', 'option', 'switch', 'textbox'].includes(
-      role,
-    );
+  const role = element.getAttribute('role');
+  if (role && INTERACTIVE_ROLES.includes(role)) return true;
+  if (WIDGET_HOST_TAGS.has(tag) || tag === 'a') {
+    const htmlElement = element as HTMLElement;
+    if (htmlElement.isContentEditable || element.getAttribute('tabindex') === '0') return true;
+    if ((element.textContent ?? '').length <= 400 && hasPointerCursor(htmlElement)) return true;
   }
-  if (tag === 'div' || tag === 'span') {
-    return element.getAttribute('tabindex') === '0' || (element as HTMLElement).isContentEditable;
-  }
-  return (element as HTMLElement).isContentEditable;
+  return false;
 }
 
 function isVisible(element: Element): boolean {

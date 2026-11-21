@@ -3,6 +3,7 @@ export type ScrollTarget = 'top' | 'bottom' | 'up' | 'down';
 export type ActionOp =
   | { op: 'click'; target: number }
   | { op: 'type'; target: number; text: string; submit?: boolean }
+  | { op: 'key'; target: number; key: string }
   | { op: 'scroll'; to: ScrollTarget }
   | { op: 'scroll'; target: number }
   | { op: 'extract'; target?: number }

@@ -39,8 +39,8 @@ const AGENT_SYSTEM = [
   'You are Browser Agent, an autonomous assistant operating the user\'s web page through a numbered element index.',
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
-  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
-  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
+  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
+  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
 ].join('\n');
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
@@ -163,14 +163,24 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       let lastError = '';
       for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
         const llmStart = performance.now();
-        const raw = await completeOnce(
-          state,
-          observation,
-          run.abort.signal,
-          attempt > 0
-            ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
-            : stuckWarning,
-        );
+        let raw: string;
+        try {
+          raw = await completeOnce(
+            state,
+            observation,
+            run.abort.signal,
+            attempt > 0
+              ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
+              : stuckWarning,
+          );
+        } catch (callError) {
+          if (callError instanceof DOMException && callError.name === 'TimeoutError') {
+            lastError = 'the LLM request timed out';
+            details.push(`llm attempt ${attempt + 1}: timed out`);
+            continue;
+          }
+          throw callError;
+        }
         details.push(
           `llm: ${Math.round(performance.now() - llmStart)}ms, ${raw.length} chars${attempt > 0 ? ' (retry)' : ''}`,
         );
@@ -424,6 +434,10 @@ function coerceAction(candidate: unknown): ActionOp | null {
     case 'type':
       return target != null && typeof record.text === 'string'
         ? { op: 'type', target, text: record.text, submit: record.submit === true }
+        : null;
+    case 'key':
+      return target != null && typeof record.key === 'string'
+        ? { op: 'key', target, key: record.key }
         : null;
     case 'scroll':
       return 'to' in record &&

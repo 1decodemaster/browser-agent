@@ -25,6 +25,10 @@ export function parseCommand(raw: string): ActionOp[] | null {
     return [{ op: 'type', target: Number(match[1]), text: '' }];
   }
 
+  if ((match = lower.match(/^key (\S+) in(to)? (\d+)$/))) {
+    return [{ op: 'key', target: Number(match[3]!), key: normalizeKeyName(match[1]!) }];
+  }
+
   if ((match = lower.match(/^extract (\d+)$/))) {
     return [{ op: 'extract', target: Number(match[1]) }];
   }
@@ -49,10 +53,25 @@ function isPlausibleUrl(value: string): boolean {
   return /^(https?:\/\/|[\w-]+(\.[\w-]+)+)/.test(value);
 }
 
+function normalizeKeyName(value: string): string {
+  const named: Record<string, string> = {
+    enter: 'Enter',
+    tab: 'Tab',
+    esc: 'Escape',
+    escape: 'Escape',
+    down: 'ArrowDown',
+    up: 'ArrowUp',
+    left: 'ArrowLeft',
+    right: 'ArrowRight',
+  };
+  return named[value.toLowerCase()] ?? value;
+}
+
 export const COMMAND_HELP = [
   'Local commands (anything else goes to the LLM, or starts an agent run when Act is on):',
   '  click <n> — click indexed element',
   '  type "text" into <n> [and submit] — fill a field',
+  '  key <Enter|ArrowDown|Escape|…> in <n> — press a key on a field',
   '  clear <n> — empty a field',
   '  extract <n> — read element text into the chat',
   '  extract all — read the page\'s main text into the chat',

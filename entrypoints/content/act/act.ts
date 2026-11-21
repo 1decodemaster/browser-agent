@@ -1,6 +1,6 @@
 import { buildElementTable, ElementTable, serializeTable } from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
-import { clickElement, copyText, findClickTarget, focusElement, isSyntheticClick, setValue } from './executor';
+import { clickElement, copyText, findClickTarget, focusElement, isSyntheticClick, pressKey, readFieldValue, setContentEditableValue, setValue } from './executor';
 import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
@@ -166,39 +166,46 @@ async function runAction(
       case 'type': {
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
-        let field: HTMLInputElement | HTMLTextAreaElement;
-        if (
-          resolved.element instanceof HTMLInputElement ||
-          resolved.element instanceof HTMLTextAreaElement
-        ) {
-          field = resolved.element;
-        } else {
-          const nested = resolved.element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-            'input, textarea',
-          );
-          if (!nested) {
-            return { ...base, ok: false, message: `[${action.target}] is not a text field and holds no input` };
-          }
-          field = nested;
+        const editable = findEditable(resolved.element);
+        if (!editable) {
+          return { ...base, ok: false, message: `[${action.target}] is not a text field and holds no input` };
+        }
+        if (editable instanceof HTMLInputElement) {
+          if (editable.disabled) return { ...base, ok: false, message: 'field is disabled' };
+          if (editable.readOnly) return { ...base, ok: false, message: 'field is read-only' };
         }
         if (needsConfirm(confirmMode, resolved.info, action.submit === true)) {
           const ok = await sp.confirmBar(
-            field.getBoundingClientRect(),
+            editable.getBoundingClientRect(),
             action.submit
               ? `Fill and submit "${resolved.info.name || resolved.info.role}"?`
               : `Fill "${resolved.info.name || resolved.info.role}"?`,
           );
           if (!ok) return { ...base, ok: false, message: 'cancelled' };
         }
-        sp.highlight(field.getBoundingClientRect(), 'focus', true);
-        setValue(field, action.text);
-        if (action.submit) submitForm(field);
-        flashSuccess(field);
+        sp.highlight(editable.getBoundingClientRect(), 'focus', true);
+        const readback =
+          editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement
+            ? setValue(editable, action.text)
+            : setContentEditableValue(editable, action.text);
+        const stuck = readback.trim() !== action.text;
+        if (action.submit && !stuck) submitForm(editable);
+        if (!stuck) flashSuccess(editable);
         return {
           ...base,
-          ok: true,
-          message: `${action.text.length} char(s)${action.submit ? ' + submit' : ''}`,
+          ok: !stuck,
+          message: stuck
+            ? `typed but field now reads "${readback.trim().slice(0, 60)}" - value did not stick`
+            : `${action.text.length} char(s), field now "${readback.trim().slice(0, 60)}"${action.submit ? ' + submit' : ''}`,
         };
+      }
+      case 'key': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
+        pressKey(resolved.element, action.key);
+        flashSuccess(resolved.element);
+        return { ...base, ok: true, message: `pressed ${action.key}` };
       }
       case 'scroll': {
         if ('to' in action) {
@@ -276,13 +283,29 @@ function needsConfirm(
   return isHighRisk(info.name);
 }
 
-function submitForm(field: HTMLInputElement | HTMLTextAreaElement): void {
-  if (field.form) {
-    field.form.requestSubmit();
+function submitForm(element: HTMLElement): void {
+  const form = element.closest('form');
+  if (form) {
+    form.requestSubmit();
     return;
   }
-  field.dispatchEvent(
+  element.dispatchEvent(
     new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }),
+  );
+}
+
+function findEditable(
+  element: HTMLElement,
+): HTMLInputElement | HTMLTextAreaElement | HTMLElement | null {
+  if (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element.isContentEditable
+  ) {
+    return element;
+  }
+  return element.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLElement>(
+    'input, textarea, [contenteditable="true"]',
   );
 }
 

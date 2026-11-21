@@ -6,7 +6,23 @@
 
 ## Current status
 
-- **Extension version:** 0.9.2 (fix: executor clicks were killed by our own capture listener)
+- **Extension version:** 0.10.0 (SPA widget support: pointer-cursor indexing, field readback, key op)
+- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input)
+- v0.10.0 from Kayak/MMT failures (React-handler widgets, unverifiable typing, 120s timeout
+  aborting runs):
+  - **Cursor:pointer heuristic**: elements with `cursor:pointer` (React/Vue onClick widgets with
+    no DOM attr) are indexed interactive (bounded: widget-host tags, textContent ≤ 400 chars) and
+    clicked directly at execute time as last-resort drill-down
+  - **All form fields are behavioral** now (input/textarea/select) — clicking a textbox focuses
+    it instead of drilling to a parent label/div
+  - **Type truth**: setValue returns readback; observation reports `field now "DEL"` and fails
+    (`ok:false`) if the value didn't stick; readonly/disabled detected; contenteditable fields
+    supported (select-all + insertText)
+  - **`key` op**: `{"op":"key","target":N,"key":"Enter"}` — synthetic keydown/keyup for combobox
+    flows; local command `key <Enter|ArrowDown|Escape|…> in <n>`
+  - **Timeout retry**: LLM TimeoutError retries the step once instead of failing the whole run
+  - Prompt guidance: autocomplete flow = type (no submit) → wait → click option row / press Enter
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
 - v0.9.2: since v0.8.0 the agent only runs with Act mode ON, and Act's document-level capture
