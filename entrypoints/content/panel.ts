@@ -363,15 +363,24 @@ export function mountUi(css: string): void {
         activeRequestId = null;
         break;
       }
+      case 'chat.answer': {
+        addAssistantMessage(message.text);
+        break;
+      }
       case 'agent.step': {
         addNote(`Step ${message.step}: ${message.thought || '(no thought)'}`);
         for (const detail of message.details ?? []) addNote(`  · ${detail}`);
         for (const observation of message.observations) {
           const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
+          const rawMessage = observation.message ?? '';
+          const display =
+            observation.op === 'extract' && observation.ok
+              ? `${rawMessage.slice(0, 400)}${rawMessage.length > 400 ? '…' : ''}`
+              : rawMessage;
           addNote(
             observation.ok
-              ? `  ${label} → ok${observation.message ? ` — ${observation.message}` : ''}`
-              : `  ${label} → failed — ${observation.message ?? 'unknown error'}`,
+              ? `  ${label} → ok${display ? ` — ${display}` : ''}`
+              : `  ${label} → failed — ${display || 'unknown error'}`,
           );
         }
         break;

@@ -3,6 +3,7 @@ import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
 import { streamChat, type ApiMessage } from './llm';
 import { acquireKeepalive, releaseKeepalive } from './keepalive';
+import { getHistory, saveHistory } from './chat';
 import type {
   ActionObservation,
   ActionOp,
@@ -38,8 +39,8 @@ const AGENT_SYSTEM = [
   'You are Browser Agent, an autonomous assistant operating the user\'s web page through a numbered element index.',
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
-  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
-  'Rules: 1-3 actions per step. Use extract to read text. Targets must exist in the provided index. Call done when the goal is achieved.',
+  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
+  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. Targets must exist in the provided index. Call done with the answer in summary when the goal is achieved.',
 ].join('\n');
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
@@ -197,7 +198,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         ...observations.map(formatObservation),
       ];
       state.narration.push(...stepLines);
-      if (state.narration.length > 40) state.narration = state.narration.slice(-40);
+      trimNarration(state);
       await saveState(tabId, state);
       notify(tabId, {
         type: 'agent.step',
@@ -236,11 +237,47 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       state.narration.push(`Finished: ${summary ?? 'done'}`);
       console.info(`[agent] tab=${tabId} finished: ${summary ?? 'done'}`);
     }
-    if (state.narration.length > 40) state.narration = state.narration.slice(-40);
+    trimNarration(state);
     await saveState(tabId, state);
     if (error) notify(tabId, { type: 'agent.error', message: error });
     else notify(tabId, { type: 'agent.done', summary });
+    if (!run.stop && state.narration.length > 0) {
+      try {
+        const answer = await synthesizeAnswer(state);
+        if (answer.trim()) {
+          const history = await getHistory(tabId);
+          history.push({ role: 'assistant', text: answer });
+          await saveHistory(tabId, history);
+          notify(tabId, { type: 'chat.answer', text: answer });
+        }
+      } catch (synthError) {
+        console.info('[agent] answer synthesis failed:', synthError);
+      }
+    }
   }
+}
+
+function trimNarration(state: AgentState): void {
+  if (state.narration.length > 40) state.narration = state.narration.slice(-40);
+  while (state.narration.join('\n').length > 16_000 && state.narration.length > 4) {
+    state.narration.shift();
+  }
+}
+
+async function synthesizeAnswer(state: AgentState): Promise<string> {
+  const settings = await getSettings();
+  if (!settings.endpointUrl) return '';
+  const base = normalizeEndpoint(settings.endpointUrl);
+  const transcript = state.narration.join('\n');
+  const messages: ApiMessage[] = [
+    {
+      role: 'system',
+      content:
+        'You are Browser Agent. An autonomous agent run just tried to accomplish the user goal on web pages. Write the final response to the user: answer the original question from the transcript if the information was found (mention which page it came from), otherwise summarize what was accomplished and what blocked progress. Be concise.',
+    },
+    { role: 'user', content: `Goal: ${state.goal}\n\nAgent transcript:\n${transcript}` },
+  ];
+  return streamChat({ base, apiKey: settings.apiKey, model: settings.model, messages });
 }
 
 function confirmMode(askFirst: boolean): ConfirmMode {
@@ -255,7 +292,9 @@ async function observeWithRetry(
   while (Date.now() < deadline) {
     if (run.stop) return null;
     try {
-      return await rpc<ObserveResult>({ kind: 'act:observe' }, tabId);
+      const result = await rpc<ObserveResult>({ kind: 'act:observe' }, tabId);
+      if (result.index.trim().length >= 20) return result;
+      console.info('[agent] observe returned an empty index - page not ready, retrying');
     } catch {
       await delay(600);
     }
@@ -375,7 +414,7 @@ function coerceAction(candidate: unknown): ActionOp | null {
           ? { op: 'scroll', target }
           : null;
     case 'extract':
-      return target != null ? { op: 'extract', target } : null;
+      return { op: 'extract', target };
     case 'navigate':
       return typeof record.url === 'string' ? { op: 'navigate', url: record.url } : null;
     case 'wait':
@@ -389,9 +428,13 @@ function coerceAction(candidate: unknown): ActionOp | null {
 
 function formatObservation(observation: ActionObservation): string {
   const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
-  return observation.ok
-    ? `  ${label} → ok${observation.message ? ` — ${observation.message}` : ''}`
-    : `  ${label} → failed — ${observation.message ?? 'unknown error'}`;
+  if (!observation.ok) {
+    return `  ${label} → failed — ${observation.message ?? 'unknown error'}`;
+  }
+  if (observation.op === 'extract') {
+    return `  ${label} → ok (${observation.message?.length ?? 0} chars):\n${observation.message ?? ''}`;
+  }
+  return `  ${label} → ok${observation.message ? ` — ${observation.message}` : ''}`;
 }
 
 function isAbortError(error: unknown): boolean {

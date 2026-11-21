@@ -10,6 +10,7 @@ const ACT_UI_KEY = '__ba_act';
 let spotlight: Spotlight | null = null;
 let active = false;
 let askFirst = false;
+let pinnedTable: ElementTable | null = null;
 let table: ElementTable | null = null;
 let tableDirty = false;
 let pinned: { element: HTMLElement; id: number } | null = null;
@@ -87,6 +88,13 @@ export function serializeIndex(): string | null {
   return current ? serializeTable(current) : null;
 }
 
+export function observePage(): { index: string; url: string; title: string } {
+  table = buildElementTable();
+  pinnedTable = table;
+  tableDirty = false;
+  return { index: serializeTable(table), url: location.href, title: document.title };
+}
+
 const HIGH_RISK_PATTERN =
   /delete|remove|pay|purchase|checkout|buy|sign ?out|log ?out|place order|trash|empty/i;
 
@@ -98,7 +106,7 @@ export async function executeActions(
   if (!spotlight) {
     return actions.map((action) => ({ ok: false, op: action.op, message: 'Spotlight not mounted' }));
   }
-  const current = ensureFreshTable();
+  const current = pinnedTable ?? ensureFreshTable();
   for (const action of actions) {
     observations.push(await runAction(action, current, confirmMode));
   }
@@ -173,6 +181,10 @@ async function runAction(
         return { ...base, ok: true };
       }
       case 'extract': {
+        if (action.target == null) {
+          const text = extractMainText();
+          return { ...base, ok: true, message: text };
+        }
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
         const text = elementText(resolved.element);
@@ -184,7 +196,7 @@ async function runAction(
             sp.hideHighlight();
           }
         }, 600);
-        return { ...base, ok: true, message: text.slice(0, 200) || '(empty)' };
+        return { ...base, ok: true, message: text || '(empty)' };
       }
       case 'navigate': {
         window.setTimeout(() => {
@@ -524,6 +536,28 @@ function onScroll(): void {
 
 function elementText(element: HTMLElement): string {
   return (element.innerText ?? element.textContent ?? '').trim();
+}
+
+function extractMainText(): string {
+  const selectors = ['main', 'article', '[role="main"]', '#content', '#mw-content-text'];
+  let best: HTMLElement | null = null;
+  let bestLength = 0;
+  for (const selector of selectors) {
+    for (const candidate of document.querySelectorAll<HTMLElement>(selector)) {
+      const length = candidate.innerText?.length ?? 0;
+      if (length > bestLength) {
+        best = candidate;
+        bestLength = length;
+      }
+    }
+  }
+  const source = best ?? document.body;
+  let text = (source?.innerText ?? '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (text.length > 8000) text = `${text.slice(0, 8000)}\n…(truncated)`;
+  return text;
 }
 
 function describeForChat(

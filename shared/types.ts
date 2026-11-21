@@ -48,6 +48,7 @@ export type ChatPortMessage =
   | { type: 'chat.delta'; requestId: string; text: string; reasoning?: boolean }
   | { type: 'chat.done'; requestId: string; text: string; stopped?: boolean }
   | { type: 'chat.error'; requestId: string; message: string }
+  | { type: 'chat.answer'; text: string }
   | { type: 'agent.start'; goal: string; askFirst: boolean }
   | { type: 'agent.stop' }
   | { type: 'agent.step'; step: number; thought: string; observations: ActionObservation[]; details?: string[] }

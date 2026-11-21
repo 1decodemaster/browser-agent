@@ -6,9 +6,24 @@
 
 ## Current status
 
-- **Extension version:** 0.8.3 (fix: SW has no `window` — keepalive/timers crashed agent start)
+- **Extension version:** 0.9.0 (agent correctness: snapshot pinning, extract-all, answer synthesis)
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
+- v0.9.0 fixes from HAR/log analysis of the Ram→Rama→Rama Navami runs:
+  - **Snapshot pinning (the "Dhyana mystery")**: `act:observe` builds a fresh table and PINS it;
+    `act:execute` uses the pinned table instead of rebuilding — ids in the prompt now always
+    match ids at execute time. Previously MutationObserver-driven rebuilds renumbered ids between
+    observe and execute → wrong element clicked ("ok — avatars" → Dhyana page) → cascade of
+    bfcache/channel-closed errors
+  - **Empty-index readiness retry**: observe results with near-empty index are retried until the
+    15s deadline (page still rendering after navigation)
+  - **Serialization budget rebalance**: max 280 entries = 120 interactive + 160 content; unnamed
+    entries and `label` elements dropped — article text is now visible to the model
+  - **`extract` with no target** = main-text extraction (main/article/[role=main] heuristic, 8k
+    cap) so the model can read articles; `extract all` local command too
+  - **Answer synthesis**: after every non-stopped run, the bg makes one streaming call over the
+    goal+narration and posts the final answer into chat history + panel as a real assistant
+    message (`chat.answer`) — runs no longer end silently
 - v0.8.3: replaced `window.setInterval/clearInterval/setTimeout` with bare globals in background
   context (keepalive.ts, agent.ts delay()) — `window` is undefined in MV3 service workers; the
   crash killed runLoop before the first LLM call (v0.8.2 regression).

@@ -1,7 +1,7 @@
 import { onRpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { mountUi, prefillInput, togglePanel } from './panel';
-import { configureAct, executeActions, mountAct, serializeIndex } from './act/act';
+import { configureAct, executeActions, mountAct, observePage } from './act/act';
 import styles from './panel.css?inline';
 import actStyles from './act/act.css?inline';
 
@@ -23,7 +23,7 @@ export default defineContentScript({
           togglePanel();
           return true;
         case 'act:observe':
-          return { index: serializeIndex() ?? '', url: location.href, title: document.title };
+          return observePage();
         case 'act:execute':
           return executeActions(request.actions, request.confirmMode);
         default:

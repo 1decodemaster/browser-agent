@@ -5,7 +5,7 @@ export type ActionOp =
   | { op: 'type'; target: number; text: string; submit?: boolean }
   | { op: 'scroll'; to: ScrollTarget }
   | { op: 'scroll'; target: number }
-  | { op: 'extract'; target: number }
+  | { op: 'extract'; target?: number }
   | { op: 'navigate'; url: string }
   | { op: 'wait'; ms: number }
   | { op: 'done'; summary?: string };

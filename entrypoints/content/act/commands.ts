@@ -29,6 +29,10 @@ export function parseCommand(raw: string): ActionOp[] | null {
     return [{ op: 'extract', target: Number(match[1]) }];
   }
 
+  if (lower === 'extract all' || lower === 'extract') {
+    return [{ op: 'extract' }];
+  }
+
   if ((match = lower.match(/^scroll (top|bottom|up|down)$/))) {
     return [{ op: 'scroll', to: match[1] as ScrollTarget }];
   }
@@ -51,6 +55,7 @@ export const COMMAND_HELP = [
   '  type "text" into <n> [and submit] — fill a field',
   '  clear <n> — empty a field',
   '  extract <n> — read element text into the chat',
+  '  extract all — read the page\'s main text into the chat',
   '  scroll top|bottom|up|down',
   '  navigate <url>',
   '  agent log — replay the last agent run for this tab',

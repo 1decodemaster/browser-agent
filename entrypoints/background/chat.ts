@@ -22,7 +22,7 @@ export async function clearHistory(tabId: number): Promise<void> {
   await storage.removeItem(chatKey(tabId));
 }
 
-async function saveHistory(tabId: number, messages: ChatMessage[]): Promise<void> {
+export async function saveHistory(tabId: number, messages: ChatMessage[]): Promise<void> {
   await storage.setItem(chatKey(tabId), messages);
 }
 

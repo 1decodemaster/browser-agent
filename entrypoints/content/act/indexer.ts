@@ -181,25 +181,23 @@ function truncate(text: string, max: number): string {
 }
 
 export function serializeTable(table: ElementTable, maxEntries = 280): string {
+  const interactiveBudget = 120;
   const interactive: string[] = [];
   const content: string[] = [];
   for (const id of table.order) {
     const info = table.info.get(id)!;
-    const name = info.name ? ` "${info.name}"` : '';
+    if (!info.name.trim() || info.tag === 'label') continue;
+    const name = ` "${info.name}"`;
     const href = info.href ? ` -> ${info.href}` : '';
     const line = `[${info.id}] ${info.role}${name}${href}`;
     (info.kind === 'interactive' ? interactive : content).push(line);
   }
-  const picked: string[] = [];
-  for (const line of interactive) {
-    if (picked.length >= maxEntries) break;
-    picked.push(line);
-  }
+  const picked: string[] = interactive.slice(0, interactiveBudget);
   for (const line of content) {
     if (picked.length >= maxEntries) break;
     picked.push(line);
   }
-  const total = table.order.length;
+  const total = interactive.length + content.length;
   if (total > picked.length) {
     picked.push(
       `…(${total - picked.length} more elements not shown - scroll or refine the page to reveal them)`,
