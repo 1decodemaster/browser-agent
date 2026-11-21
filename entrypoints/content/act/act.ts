@@ -1,6 +1,6 @@
 import { buildElementTable, ElementTable, serializeTable } from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
-import { clickElement, copyText, findClickTarget, focusElement, setValue } from './executor';
+import { clickElement, copyText, findClickTarget, focusElement, isSyntheticClick, setValue } from './executor';
 import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
@@ -145,8 +145,12 @@ async function runAction(
           };
         }
         sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
-        clickElement(found.target);
-        flashSuccess(found.target);
+        if (found.href) {
+          window.setTimeout(() => clickElement(found.target), 50);
+        } else {
+          clickElement(found.target);
+          flashSuccess(found.target);
+        }
         let message: string;
         if (found.href) {
           message = `link -> ${found.href}`;
@@ -413,6 +417,7 @@ function onHover(event: MouseEvent): void {
 
 function onCaptureClick(event: MouseEvent): void {
   if (!active || !spotlight) return;
+  if (isSyntheticClick()) return;
   const target = event.target as Element | null;
   if (target && isOwnHost(target)) return;
   event.preventDefault();

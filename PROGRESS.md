@@ -6,7 +6,15 @@
 
 ## Current status
 
-- **Extension version:** 0.9.1 (click drill-down + no-progress guard)
+- **Extension version:** 0.9.2 (fix: executor clicks were killed by our own capture listener)
+- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input)
+- v0.9.2: since v0.8.0 the agent only runs with Act mode ON, and Act's document-level capture
+  click listener (`preventDefault` + `stopPropagation` to enable pinning) was swallowing the
+  executor's own synthetic `el.click()` — anchors never navigated, model looped on dead clicks.
+  Fix: `isSyntheticClick()` depth guard in executor.ts bypasses the capture listener during
+  executor-driven clicks; anchor clicks defer 50ms (like `navigate`) so the observation response
+  escapes before unload.
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
 - v0.9.1 fixes from the Main-Page stuck-click run (agent clicked `[297] li` 6× while `[298] a`

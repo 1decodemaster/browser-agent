@@ -36,9 +36,20 @@ export function findClickTarget(element: HTMLElement): ClickTarget {
   return { target: element, behavioral: false };
 }
 
+let syntheticClickDepth = 0;
+
+export function isSyntheticClick(): boolean {
+  return syntheticClickDepth > 0;
+}
+
 export function clickElement(element: HTMLElement): void {
   element.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-  element.click();
+  syntheticClickDepth++;
+  try {
+    element.click();
+  } finally {
+    syntheticClickDepth--;
+  }
 }
 
 export function focusElement(element: HTMLElement): void {
