@@ -6,9 +6,11 @@
 
 ## Current status
 
-- **Extension version:** 0.10.0 (SPA widget support: pointer-cursor indexing, field readback, key op)
-- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
-  optional chrome.debugger trusted input)
+- **Extension version:** 0.10.0 shipped (SPA widget support: pointer-cursor indexing, field
+  readback, key op). Kayak/MMT retest pending on user's machine; flight booking still imperfect
+  (complex unique pages — accepted for now, move on).
+- **Next phase: C1–C3 (chat context + voice)** — see "Chat context + voice phases" below.
+  A4 (vision grounding, Wikipedia-hop e2e, chrome.debugger trusted input) deferred until after C3.
 - v0.10.0 from Kayak/MMT failures (React-handler widgets, unverifiable typing, 120s timeout
   aborting runs):
   - **Cursor:pointer heuristic**: elements with `cursor:pointer` (React/Vue onClick widgets with
@@ -145,10 +147,31 @@
     (Supervise = confirm every action on-page, Normal = destructive-only confirms, Auto = none);
     chat send/embeds disabled while the agent runs
   - RPC: `agent:get` (bg), `act:observe` / `act:execute{confirmMode}` (bg→content)
-- [ ] **A4 — Multi-page + grounding**: navigate ops across pages work via the loop; remaining:
-  screenshot/vision grounding in observe, Wikipedia-hop end-to-end test, optional trusted input
-- [ ] **A4 — Multi-page + grounding**: navigate/link ops across pages, readiness detection,
-  screenshot/vision grounding, optional chrome.debugger trusted input (Chrome, opt-in)
+- [ ] **A4 — Multi-page + grounding** (DEFERRED until after C3): cross-page navigate works via
+  the loop; remaining: screenshot/vision grounding in observe, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input (Chrome, opt-in)
+
+## Chat context + voice phases (planned)
+
+- [ ] **C1 — Auto page context (v0.11.0)**: remove the "Embed HTML" button entirely; every chat
+  send auto-attaches a fresh snapshot of the current page, captured at send time (navigation-safe
+  — no stale embeds; "if the page navigated, use that HTML"). Snapshot = compact accessible-DOM
+  serialization, not raw innerHTML: reuse the act indexer's `serializeTable()` output
+  (role/name/text lines, ids consistent with Act mode), fallback to `collectPageHtml()` when the
+  table is near-empty. Decide history-bloat policy during implementation (e.g., only keep the
+  last 1–2 snapshots in the prompt window).
+- [ ] **C2 — Camera button + multi-screenshot (v0.11.0)**: replace the big "Embed Screenshot"
+  button with a small camera icon inline in the composer; each click APPENDS a screenshot chip
+  instead of replacing (chips row already supports multiple). Protocol: `screenshotDataUrl` →
+  `screenshots: string[]`; LLM message carries one image part per screenshot.
+- [ ] **C3 — Voice (v0.12.0)**: mic button in the composer that fills the input with the
+  transcript — works for chat AND Act goals alike (Send stays manual).
+  - STT: Web Speech API (`webkitSpeechRecognition`) when available (Chrome); fallback =
+    OpenAI-compatible `/v1/audio/transcriptions` (MediaRecorder capture → base64 POST), new
+    settings `sttEndpointUrl` + `sttModel` (blank = disabled). Interim transcript rendered live
+    in the input.
+  - TTS: play button per assistant message via `speechSynthesis` (local voices, both browsers)
+    + optional "auto-read responses" toggle in settings; playback stops on Send/Stop.
 
 ## Decisions log
 
