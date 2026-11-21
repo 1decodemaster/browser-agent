@@ -485,16 +485,22 @@ async function completeOnce(
     extraBody = { reasoning_effort: configuredEffort };
   }
 
-  return streamChat({
-    base,
-    apiKey: settings.apiKey,
-    model,
-    messages,
-    signal,
-    firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
-    totalTimeoutMs: settings.llmTotalTimeoutMs,
-    extraBody,
-  });
+  try {
+    return await streamChat({
+      base,
+      apiKey: settings.apiKey,
+      model,
+      messages,
+      signal,
+      firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
+      totalTimeoutMs: settings.llmTotalTimeoutMs,
+      extraBody,
+    });
+  } catch (error) {
+    if (isLlmTimeout(error) || isAbortError(error)) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message} - endpoint: ${base}`);
+  }
 }
 
 function parseActionResponse(raw: string): {

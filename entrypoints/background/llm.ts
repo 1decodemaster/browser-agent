@@ -77,12 +77,28 @@ export async function streamChat(options: StreamChatOptions): Promise<string> {
     );
     controller.abort(timeoutError);
   }, totalMs);
+  const disarmFirstToken = (): void => {
+    if (firstTokenTimer !== undefined) {
+      clearTimeout(firstTokenTimer);
+      firstTokenTimer = undefined;
+    }
+  };
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
+  const url = `${base}/v1/chat/completions`;
+  const effortNote = extraBody?.reasoning_effort
+    ? ` effort=${String(extraBody.reasoning_effort)}`
+    : extraBody?.chat_template_kwargs
+      ? ' effort=thinking-off'
+      : '';
+  console.info(
+    `[llm] POST ${url} model=${model}${effortNote} msgs=${messages.length}`,
+  );
+
   try {
-    const response = await fetch(`${base}/v1/chat/completions`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers,
       signal: controller.signal,
@@ -95,57 +111,64 @@ export async function streamChat(options: StreamChatOptions): Promise<string> {
       );
     }
     if (!response.body) throw new Error('Response has no body');
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let acc = '';
-    let done = false;
-    while (!done) {
-      const { done: finished, value } = await reader.read();
-      if (finished) break;
-      if (firstTokenTimer !== undefined) {
-        clearTimeout(firstTokenTimer);
-        firstTokenTimer = undefined;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      for (;;) {
-        const newline = buffer.indexOf('\n');
-        if (newline < 0) break;
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (data === '[DONE]') {
-          done = true;
-          break;
-        }
-        try {
-          const chunk = JSON.parse(data) as {
-            choices?: Array<{
-              delta?: { content?: string; reasoning?: string; reasoning_content?: string };
-            }>;
-          };
-          const delta = chunk.choices?.[0]?.delta;
-          const reasoning = delta?.reasoning ?? delta?.reasoning_content;
-          if (delta?.content) {
-            acc += delta.content;
-            onDelta?.(delta.content, false);
-          } else if (reasoning) {
-            onDelta?.(reasoning, true);
-          }
-        } catch {
-          buffer = '';
-        }
-      }
-    }
-    return acc;
+    return await readStream(response, disarmFirstToken, onDelta);
   } catch (error) {
     if (timeoutError) throw timeoutError;
+    if (!isLlmTimeout(error) && !(error instanceof DOMException && error.name === 'AbortError')) {
+      console.warn(`[llm] request to ${url} failed:`, error instanceof Error ? error.message : error);
+    }
     throw error;
   } finally {
-    if (firstTokenTimer !== undefined) clearTimeout(firstTokenTimer);
+    disarmFirstToken();
     clearTimeout(totalTimer);
     signal?.removeEventListener('abort', forwardAbort);
   }
+}
+
+async function readStream(
+  response: Response,
+  disarmFirstToken: () => void,
+  onDelta?: (text: string, reasoning: boolean) => void,
+): Promise<string> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let acc = '';
+  let done = false;
+  while (!done) {
+    const { done: finished, value } = await reader.read();
+    if (finished) break;
+    disarmFirstToken();
+    buffer += decoder.decode(value, { stream: true });
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') {
+        done = true;
+        break;
+      }
+      try {
+        const chunk = JSON.parse(data) as {
+          choices?: Array<{
+            delta?: { content?: string; reasoning?: string; reasoning_content?: string };
+          }>;
+        };
+        const delta = chunk.choices?.[0]?.delta;
+        const reasoning = delta?.reasoning ?? delta?.reasoning_content;
+        if (delta?.content) {
+          acc += delta.content;
+          onDelta?.(delta.content, false);
+        } else if (reasoning) {
+          onDelta?.(reasoning, true);
+        }
+      } catch {
+        buffer = '';
+      }
+    }
+  }
+  return acc;
 }

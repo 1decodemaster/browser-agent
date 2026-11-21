@@ -129,7 +129,7 @@ async function handleSend(
     if (controller.signal.aborted) {
       port.postMessage({ type: 'chat.done', requestId, text: '', stopped: true });
     } else {
-      port.postMessage({ type: 'chat.error', requestId, message: describeError(error) });
+      port.postMessage({ type: 'chat.error', requestId, message: describeError(error, base) });
     }
   } finally {
     releaseKeepalive();
@@ -185,14 +185,15 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
-function describeError(error: unknown): string {
+function describeError(error: unknown, base?: string): string {
   if (isLlmTimeout(error)) {
     const detail = error instanceof Error ? error.message : 'the model took too long to respond.';
     return `LLM request timed out - ${detail}`;
   }
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof TypeError) {
-    return `${message} - could not reach the endpoint. For Ollama set OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*"; in LM Studio enable CORS.`;
+    const endpoint = base ? ` (${base})` : '';
+    return `${message} - could not reach the endpoint${endpoint}. Check Options -> endpoint URL and "Test connection". For Ollama set OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*"; in LM Studio enable CORS.`;
   }
   if (message.includes('403')) {
     return `${message} - the server rejected this extension's origin. For Ollama set OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*".`;

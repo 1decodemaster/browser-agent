@@ -34,7 +34,7 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXT = os.path.join(ROOT, '.output', 'chrome-mv3')
+EXT = os.environ.get('BA_E2E_EXT', os.path.join(ROOT, '.output', 'chrome-mv3'))
 FIXTURE_DIR = os.path.join(ROOT, 'tests', 'fixtures')
 FIXTURE_URL = 'http://localhost:8901/kayak-like.html'
 LLM_URL = 'http://localhost:8902'
