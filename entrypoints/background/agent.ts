@@ -40,7 +40,7 @@ const AGENT_SYSTEM = [
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
   'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
-  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. Targets must exist in the provided index. Call done with the answer in summary when the goal is achieved.',
+  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
 ].join('\n');
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
@@ -132,6 +132,9 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
+  let lastUrl = '';
+  let lastPrimaryTarget: number | null = null;
+  let repeatCount = 0;
   try {
     while (state.step < MAX_STEPS) {
       if (run.stop) {
@@ -151,6 +154,10 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       const details: string[] = [
         `observe: ${observation.index ? observation.index.split('\n').length : 0} entries in ${Math.round(performance.now() - observeStart)}ms`,
       ];
+      const stuckWarning =
+        repeatCount >= 2 && lastPrimaryTarget != null
+          ? `WARNING: clicking [${lastPrimaryTarget}] ${repeatCount + 1} times in a row has not changed the page (still on ${lastUrl}). Choose a DIFFERENT element or a different strategy.`
+          : null;
 
       let parsed: { thought: string; actions: ActionOp[] } | null = null;
       let lastError = '';
@@ -162,7 +169,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           run.abort.signal,
           attempt > 0
             ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
-            : null,
+            : stuckWarning,
         );
         details.push(
           `llm: ${Math.round(performance.now() - llmStart)}ms, ${raw.length} chars${attempt > 0 ? ' (retry)' : ''}`,
@@ -220,6 +227,19 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         error = 'Model returned no executable actions.';
         break;
       }
+
+      const primary = executable[0];
+      const primaryTarget =
+        primary && 'target' in primary && typeof primary.target === 'number'
+          ? primary.target
+          : null;
+      if (observation.url === lastUrl && primaryTarget != null && primaryTarget === lastPrimaryTarget) {
+        repeatCount++;
+      } else {
+        repeatCount = 0;
+      }
+      lastUrl = observation.url;
+      lastPrimaryTarget = primaryTarget;
     }
     if (!summary && !error && state.step >= MAX_STEPS) {
       summary = `Reached the step limit (${MAX_STEPS}).`;

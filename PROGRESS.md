@@ -6,7 +6,22 @@
 
 ## Current status
 
-- **Extension version:** 0.9.0 (agent correctness: snapshot pinning, extract-all, answer synthesis)
+- **Extension version:** 0.9.1 (click drill-down + no-progress guard)
+- **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
+  optional chrome.debugger trusted input)
+- v0.9.1 fixes from the Main-Page stuck-click run (agent clicked `[297] li` 6× while `[298] a`
+  held the href):
+  - **Click drill-down** (`findClickTarget` in executor.ts): if the target has no behavior, click
+    the nearest interactive *descendant* (a[href]/button/[role]/[onclick], visible), else nearest
+    interactive ancestor; observation reports what was actually clicked incl. href and
+    "drilled from [N]"
+  - **Non-interactive = explicit failure**: content elements with no clickable inside return
+    `ok:false — "is a listitem, not clickable - click a link/button inside it, or extract it"`
+    so the model never burns steps on silent no-ops
+  - **Type drill-down**: type falls back to input/textarea descendants
+  - **No-progress guard**: 3 consecutive steps with same URL + same primary target inject a
+    WARNING into the next prompt forcing a different element/strategy
+  - System prompt rule added: click only interactive roles; content roles are for extract
 - **Act Mode phase:** A1–A3 done — next: **A4** (vision grounding, Wikipedia-hop end-to-end test,
   optional chrome.debugger trusted input)
 - v0.9.0 fixes from HAR/log analysis of the Ram→Rama→Rama Navami runs:

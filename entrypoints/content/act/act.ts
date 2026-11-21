@@ -1,6 +1,6 @@
 import { buildElementTable, ElementTable, serializeTable } from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
-import { clickElement, copyText, focusElement, setValue } from './executor';
+import { clickElement, copyText, findClickTarget, focusElement, setValue } from './executor';
 import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
@@ -136,20 +136,46 @@ async function runAction(
           );
           if (!ok) return { ...base, ok: false, message: 'cancelled' };
         }
+        const found = findClickTarget(resolved.element);
+        if (!found.behavioral) {
+          return {
+            ...base,
+            ok: false,
+            message: `[${action.target}] is a ${resolved.info.role}, not clickable - click a link/button inside it, or extract it instead`,
+          };
+        }
         sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
-        clickElement(resolved.element);
-        flashSuccess(resolved.element);
-        return { ...base, ok: true, message: resolved.info.name || resolved.info.role };
+        clickElement(found.target);
+        flashSuccess(found.target);
+        let message: string;
+        if (found.href) {
+          message = `link -> ${found.href}`;
+        } else {
+          const name = (found.target.innerText ?? '').trim().slice(0, 60);
+          message = `${found.target.tagName.toLowerCase()}${name ? ` "${name}"` : ''}`;
+        }
+        if (found.target !== resolved.element) {
+          message += ` (drilled from [${action.target}] ${resolved.info.role})`;
+        }
+        return { ...base, ok: true, message };
       }
       case 'type': {
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
-        const field = resolved.element as HTMLInputElement | HTMLTextAreaElement;
+        let field: HTMLInputElement | HTMLTextAreaElement;
         if (
-          !(field instanceof HTMLInputElement) &&
-          !(field instanceof HTMLTextAreaElement)
+          resolved.element instanceof HTMLInputElement ||
+          resolved.element instanceof HTMLTextAreaElement
         ) {
-          return { ...base, ok: false, message: `[${action.target}] is not a text field` };
+          field = resolved.element;
+        } else {
+          const nested = resolved.element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+            'input, textarea',
+          );
+          if (!nested) {
+            return { ...base, ok: false, message: `[${action.target}] is not a text field and holds no input` };
+          }
+          field = nested;
         }
         if (needsConfirm(confirmMode, resolved.info, action.submit === true)) {
           const ok = await sp.confirmBar(
