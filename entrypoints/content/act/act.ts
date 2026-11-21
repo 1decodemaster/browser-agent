@@ -21,6 +21,8 @@ let hoverRaf = 0;
 let lastPointer = { x: 0, y: 0 };
 let savedBodyCursor: string | null = null;
 const changeCallbacks: Array<(active: boolean) => void> = [];
+const freshElements = new Set<Element>();
+const FRESH_ELEMENT_LIMIT = 500;
 
 export function mountAct(css: string): void {
   if (document.getElementById(ACT_HOST_ID) != null) return;
@@ -69,6 +71,7 @@ export function setActMode(on: boolean): void {
   } else {
     stopListeners();
     pinned = null;
+    freshElements.clear();
     spotlight.setActive(false);
     if (savedBodyCursor != null) {
       document.body.style.cursor = savedBodyCursor;
@@ -89,7 +92,8 @@ export function serializeIndex(): string | null {
 }
 
 export function observePage(): { index: string; url: string; title: string } {
-  table = buildElementTable();
+  table = buildElementTable(freshElements.size ? new Set(freshElements) : undefined);
+  freshElements.clear();
   pinnedTable = table;
   tableDirty = false;
   return { index: serializeTable(table), url: location.href, title: document.title };
@@ -189,14 +193,19 @@ async function runAction(
             ? setValue(editable, action.text)
             : setContentEditableValue(editable, action.text);
         const stuck = readback.trim() !== action.text;
-        if (action.submit && !stuck) submitForm(editable);
+        const submitted = action.submit && !stuck;
+        const anchors = submitted ? captureAncestors(editable) : [];
+        if (submitted) submitForm(editable);
         if (!stuck) flashSuccess(editable);
+        const submitNote = submitted
+          ? ` + submit${await describePostSubmit(editable, action.text, anchors)}`
+          : '';
         return {
           ...base,
           ok: !stuck,
           message: stuck
             ? `typed but field now reads "${readback.trim().slice(0, 60)}" - value did not stick`
-            : `${action.text.length} char(s), field now "${readback.trim().slice(0, 60)}"${action.submit ? ' + submit' : ''}`,
+            : `${action.text.length} char(s), field now "${readback.trim().slice(0, 60)}"${submitNote}`,
         };
       }
       case 'key': {
@@ -284,14 +293,74 @@ function needsConfirm(
 }
 
 function submitForm(element: HTMLElement): void {
+  // Enter first: autocomplete/combobox fields commit the selected suggestion
+  // from their own keydown handler (and preventDefault). If the field did not
+  // handle the key, fall back to submitting the surrounding form.
+  const init: KeyboardEventInit = { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true };
+  const prevented = !element.dispatchEvent(new KeyboardEvent('keydown', init));
+  element.dispatchEvent(new KeyboardEvent('keyup', init));
+  if (prevented) return;
   const form = element.closest('form');
   if (form) {
     form.requestSubmit();
-    return;
   }
-  element.dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }),
-  );
+}
+
+const POST_SUBMIT_READ_MS = 400;
+const POST_SUBMIT_ANCHOR_LEVELS = 4;
+const CHIP_SCAN_ELEMENT_LIMIT = 800;
+
+function captureAncestors(element: HTMLElement): HTMLElement[] {
+  const anchors: HTMLElement[] = [];
+  let node: HTMLElement | null = element.parentElement;
+  while (node && node !== document.body && anchors.length < POST_SUBMIT_ANCHOR_LEVELS) {
+    anchors.push(node);
+    node = node.parentElement;
+  }
+  return anchors;
+}
+
+async function describePostSubmit(
+  field: HTMLElement,
+  typed: string,
+  anchors: HTMLElement[],
+): Promise<string> {
+  await delay(POST_SUBMIT_READ_MS);
+  try {
+    const parts: string[] = [];
+    if (!field.isConnected) {
+      parts.push('the field is gone (selection committed/replaced)');
+    } else {
+      const value = readFieldValue(field).trim();
+      parts.push(value ? `field now reads "${value.slice(0, 60)}"` : 'field is now empty');
+    }
+    const chip = nearbyChipText(anchors, field, typed);
+    if (chip) parts.push(`nearby text now includes "${chip}"`);
+    return parts.length ? ` [post-submit: ${parts.join('; ')}]` : ' [post-submit: no change detected]';
+  } catch {
+    return '';
+  }
+}
+
+function nearbyChipText(
+  anchors: HTMLElement[],
+  field: HTMLElement,
+  typed: string,
+): string | null {
+  const needle = typed.trim().toLowerCase();
+  if (!needle) return null;
+  for (const anchor of anchors) {
+    if (!anchor.isConnected) continue;
+    const descendants = anchor.querySelectorAll<HTMLElement>('*');
+    if (descendants.length > CHIP_SCAN_ELEMENT_LIMIT) continue;
+    for (const candidate of descendants) {
+      if (candidate === field || candidate.contains(field)) continue;
+      const text = (candidate.textContent ?? '').trim();
+      if (!text || text.length > 120) continue;
+      if (text.toLowerCase().includes(needle)) return text.slice(0, 80);
+    }
+  }
+  return null;
 }
 
 function findEditable(
@@ -326,7 +395,7 @@ function delay(ms: number): Promise<void> {
 }
 
 function refreshTable(): void {
-  table = buildElementTable();
+  table = buildElementTable(freshElements.size ? new Set(freshElements) : undefined);
   tableDirty = false;
 }
 
@@ -367,7 +436,8 @@ function startListeners(): void {
   document.addEventListener('click', onCaptureClick, true);
   document.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('scroll', onScroll, true);
-  observer = new MutationObserver(() => {
+  observer = new MutationObserver((mutations) => {
+    recordFreshMutations(mutations);
     tableDirty = true;
     if (rebuildTimer !== undefined) window.clearTimeout(rebuildTimer);
     rebuildTimer = window.setTimeout(() => {
@@ -394,6 +464,35 @@ function stopListeners(): void {
   if (hoverRaf) {
     cancelAnimationFrame(hoverRaf);
     hoverRaf = 0;
+  }
+}
+
+function recordFreshMutations(mutations: MutationRecord[]): void {
+  for (const mutation of mutations) {
+    if (mutation.type === 'childList') {
+      for (const node of mutation.addedNodes) {
+        if (node instanceof Element && !isOwnHost(node)) rememberFresh(node);
+      }
+    } else if (mutation.type === 'attributes') {
+      if (
+        mutation.target instanceof Element &&
+        !isOwnHost(mutation.target) &&
+        mutation.target !== document.body &&
+        mutation.target !== document.documentElement
+      ) {
+        rememberFresh(mutation.target);
+      }
+    }
+  }
+}
+
+function rememberFresh(element: Element): void {
+  if (freshElements.has(element)) return;
+  freshElements.add(element);
+  while (freshElements.size > FRESH_ELEMENT_LIMIT) {
+    const oldest = freshElements.values().next().value;
+    if (oldest === undefined) break;
+    freshElements.delete(oldest);
   }
 }
 

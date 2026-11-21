@@ -11,7 +11,7 @@ export default defineContentScript({
 
   async main() {
     const settings = await getSettings();
-    if (settings.sites[location.origin] === false) return;
+    if (settings.sites?.[location.origin] === false) return;
 
     mountUi(styles);
     mountAct(actStyles);

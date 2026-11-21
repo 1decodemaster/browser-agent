@@ -12,6 +12,8 @@ const actExtraInput = document.getElementById('actExtraInstructions') as HTMLTex
 const sttEndpointInput = document.getElementById('sttEndpointUrl') as HTMLInputElement;
 const sttModelInput = document.getElementById('sttModel') as HTMLInputElement;
 const ttsAutoReadInput = document.getElementById('ttsAutoRead') as HTMLInputElement;
+const firstTokenTimeoutInput = document.getElementById('llmFirstTokenTimeoutMs') as HTMLInputElement;
+const totalTimeoutInput = document.getElementById('llmTotalTimeoutMs') as HTMLInputElement;
 const statusEl = document.getElementById('status') as HTMLElement;
 const testButton = document.getElementById('test') as HTMLButtonElement;
 const form = document.getElementById('form') as HTMLFormElement;
@@ -49,6 +51,10 @@ async function load(): Promise<void> {
   sttEndpointInput.value = settings.sttEndpointUrl ?? '';
   sttModelInput.value = settings.sttModel ?? '';
   ttsAutoReadInput.checked = settings.ttsAutoRead === true;
+  firstTokenTimeoutInput.value =
+    settings.llmFirstTokenTimeoutMs != null ? String(settings.llmFirstTokenTimeoutMs) : '';
+  totalTimeoutInput.value =
+    settings.llmTotalTimeoutMs != null ? String(settings.llmTotalTimeoutMs) : '';
 }
 
 async function collect(): Promise<Settings> {
@@ -66,7 +72,14 @@ async function collect(): Promise<Settings> {
     sttEndpointUrl: sttEndpointInput.value.trim(),
     sttModel: sttModelInput.value.trim(),
     ttsAutoRead: ttsAutoReadInput.checked,
+    llmFirstTokenTimeoutMs: parseTimeout(firstTokenTimeoutInput.value),
+    llmTotalTimeoutMs: parseTimeout(totalTimeoutInput.value),
   };
+}
+
+function parseTimeout(raw: string): number | undefined {
+  const value = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(value) && value >= 1000 ? value : undefined;
 }
 
 async function save(): Promise<void> {

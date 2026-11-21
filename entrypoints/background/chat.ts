@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser';
 import type { ChatMessage, ChatPortMessage } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
-import { streamChat, type ApiContentPart, type ApiMessage } from './llm';
+import { streamChat, isLlmTimeout, type ApiContentPart, type ApiMessage } from './llm';
 import { acquireKeepalive, releaseKeepalive } from './keepalive';
 import { removeAgentState, resumeAgentIfStale, startAgent, stopAgent } from './agent';
 import { normalizeEndpoint } from '@/shared/endpoint';
@@ -109,6 +109,8 @@ async function handleSend(
       model: settings.model,
       messages: buildApiMessages(history),
       signal: controller.signal,
+      firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
+      totalTimeoutMs: settings.llmTotalTimeoutMs,
       onDelta: (deltaText, isReasoning) => {
         port.postMessage({
           type: 'chat.delta',
@@ -184,8 +186,9 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
 }
 
 function describeError(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'TimeoutError') {
-    return 'LLM request timed out - the model took too long to respond.';
+  if (isLlmTimeout(error)) {
+    const detail = error instanceof Error ? error.message : 'the model took too long to respond.';
+    return `LLM request timed out - ${detail}`;
   }
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof TypeError) {

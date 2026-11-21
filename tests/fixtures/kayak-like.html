@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cheap Flights — MockKayak</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0 24px; }
+  header { padding: 12px 0; border-bottom: 1px solid #ddd; }
+  nav a { margin-right: 14px; }
+  .field-group { border: 1px solid #ccc; border-radius: 6px; padding: 8px 12px; margin: 8px 0; max-width: 420px; display: flex; gap: 8px; align-items: center; }
+  .field-group input { flex: 1; font: inherit; padding: 6px; }
+  .chip { background: #e7f0ff; border: 1px solid #9cc0ff; border-radius: 6px; padding: 6px 10px; display: flex; gap: 8px; align-items: center; }
+  .chip button { border: none; background: transparent; cursor: pointer; font-size: 14px; }
+  #portal-suggestions { position: absolute; background: #fff; border: 1px solid #bbb; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 50; min-width: 380px; }
+  #portal-suggestions [role="option"] { padding: 8px 12px; cursor: pointer; }
+  #portal-suggestions [role="option"]:hover { background: #eef4ff; }
+  .filler li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<header>
+  <nav>
+    <a href="#">Cars</a><a href="#">Stays</a><a href="#">Deals</a><a href="#">Trips</a><a href="#">Help</a>
+  </nav>
+</header>
+<main>
+  <h1>Search Cheap Flights</h1>
+  <form id="search-form" onsubmit="return false">
+    <div class="field-group" id="origin-group">
+      <label>Origin</label>
+      <!-- combobox injected here by script; replaced by a chip after selection -->
+    </div>
+    <div class="field-group" id="dest-group">
+      <label>Destination</label>
+    </div>
+    <button type="button" id="dates">Dec 24 - Jan 27</button>
+    <button type="button" id="search">Search flights</button>
+  </form>
+  <section id="results" hidden></section>
+  <h2>Today's flight deals</h2>
+  <ul id="deals" class="filler"></ul>
+  <h2>Popular destinations</h2>
+  <ul id="filler2" class="filler"></ul>
+</main>
+<script>
+'use strict';
+const AIRPORTS = {
+  DEL: ['New Delhi (DEL) - Indira Gandhi International', 'Dehradun (DED) - Jolly Grant'],
+  SFO: ['San Francisco (SFO) - San Francisco International', 'San Jose (SJC) - Norman Y. Mineta'],
+};
+
+function makeCombobox(group, label, ariaLabel) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-label', ariaLabel);
+  input.setAttribute('aria-expanded', 'false');
+  input.placeholder = label;
+  input.autocomplete = 'off';
+  group.appendChild(input);
+  return input;
+}
+const originInput = makeCombobox(document.getElementById('origin-group'), 'Origin city', 'Origin');
+const destInput = makeCombobox(document.getElementById('dest-group'), 'Destination city', 'Destination');
+
+let portal = null;
+function closePortal() {
+  if (portal) { portal.remove(); portal = null; }
+}
+function openPortal(anchor, query) {
+  closePortal();
+  const code = query.trim().toUpperCase();
+  const options = AIRPORTS[code] || [];
+  if (!options.length) return;
+  portal = document.createElement('div');
+  portal.id = 'portal-suggestions';
+  portal.setAttribute('role', 'listbox');
+  portal.setAttribute('aria-label', anchor.getAttribute('aria-label') + ' suggestions');
+  options.forEach((text, i) => {
+    const row = document.createElement('div');
+    row.setAttribute('role', 'option');
+    row.setAttribute('tabindex', '0');
+    row.dataset.code = code;
+    row.textContent = text;
+    row.addEventListener('click', () => commit(anchor, text));
+    portal.appendChild(row);
+  });
+  document.body.appendChild(portal); // body-end portal, like Kayak
+  const rect = anchor.getBoundingClientRect();
+  portal.style.left = rect.left + 'px';
+  portal.style.top = (rect.bottom + 4) + 'px';
+  anchor.setAttribute('aria-expanded', 'true');
+}
+
+function commit(anchor, text) {
+  closePortal();
+  const group = anchor.parentElement;
+  const chip = document.createElement('div');
+  chip.className = 'chip';
+  chip.textContent = text;
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.setAttribute('aria-label', 'Remove ' + anchor.getAttribute('aria-label').toLowerCase());
+  remove.textContent = '\u00d7';
+  remove.addEventListener('click', () => { chip.remove(); group.appendChild(anchor); anchor.value = ''; });
+  chip.appendChild(remove);
+  anchor.remove();
+  group.appendChild(chip);
+}
+
+function attachAutocomplete(input) {
+  input.addEventListener('input', () => {
+    window.setTimeout(() => {
+      if (document.activeElement === input || input.value) openPortal(input, input.value);
+    }, 80);
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && portal) {
+      event.preventDefault();
+      const first = portal.querySelector('[role="option"]');
+      if (first) commit(input, first.textContent);
+    } else if (event.key === 'Escape') {
+      closePortal();
+    }
+  });
+  input.addEventListener('blur', () => window.setTimeout(closePortal, 150));
+}
+attachAutocomplete(originInput);
+attachAutocomplete(destInput);
+
+document.getElementById('search').addEventListener('click', () => {
+  const results = document.getElementById('results');
+  const originOk = !!document.querySelector('#origin-group .chip');
+  const destOk = !!document.querySelector('#dest-group .chip');
+  window.setTimeout(() => {
+    results.hidden = false;
+    if (originOk && destOk) {
+      results.innerHTML = '<h2>8 flights found: DEL \u2192 SFO, Dec 24</h2><p>Nonstop from $412 round trip.</p>';
+    } else {
+      results.innerHTML = '<h2>Pick an origin and destination first</h2>';
+    }
+  }, 300);
+});
+
+// Budget-exhausting filler: 130 interactive elements + ~300 content elements,
+// so static entries alone exceed the 280-entry serialization budget
+// (120 interactive + 160 content) and anything appended later in DOM order
+// (the suggestion portal) is truncated away unless the indexer pins it.
+(function fill() {
+  const deals = document.getElementById('deals');
+  for (let i = 1; i <= 130; i++) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = '#deal-' + i;
+    a.textContent = 'Deal to City ' + i + ' from $' + (49 + i);
+    li.appendChild(a);
+    deals.appendChild(li);
+  }
+  const filler2 = document.getElementById('filler2');
+  for (let i = 1; i <= 300; i++) {
+    const li = document.createElement('li');
+    li.textContent = 'Destination guide ' + i + ': beaches, museums, food and nightlife for city ' + i + '.';
+    filler2.appendChild(li);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 import { rpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
-import { streamChat, type ApiMessage } from './llm';
+import { streamChat, isLlmTimeout, type ApiMessage } from './llm';
 import { acquireKeepalive, releaseKeepalive } from './keepalive';
 import { getHistory, saveHistory } from './chat';
 import type {
@@ -40,7 +40,8 @@ const AGENT_SYSTEM = [
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
   'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
-  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
+  'Before setting a value, check whether the index already shows the desired state (e.g. a button or chip already labeled with the target date, city, or passenger count) - if it does, act on that element instead of re-entering the value.',
+  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
 ].join('\n');
 
 export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
@@ -85,7 +86,9 @@ export async function startAgent(tabId: number, goal: string, askFirst: boolean)
   await saveState(tabId, state);
   const run: RunHandle = { stop: false, abort: new AbortController() };
   activeRuns.set(tabId, run);
-  void runLoop(tabId, run).finally(() => activeRuns.delete(tabId));
+  void runLoop(tabId, run)
+    .catch(() => {})
+    .finally(() => activeRuns.delete(tabId));
 }
 
 export function stopAgent(tabId: number): void {
@@ -161,26 +164,29 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
 
       let parsed: { thought: string; actions: ActionOp[] } | null = null;
       let lastError = '';
+      let prevTimedOut = false;
+      let timedOut = false;
       for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
         const llmStart = performance.now();
         let raw: string;
+        const feedback = attempt > 0
+          ? prevTimedOut
+            ? 'Your previous attempt timed out before producing a reply. Reply with ONLY the JSON object.'
+            : `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
+          : stuckWarning;
         try {
-          raw = await completeOnce(
-            state,
-            observation,
-            run.abort.signal,
-            attempt > 0
-              ? `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
-              : stuckWarning,
-          );
+          raw = await completeOnce(state, observation, run.abort.signal, feedback);
         } catch (callError) {
-          if (callError instanceof DOMException && callError.name === 'TimeoutError') {
-            lastError = 'the LLM request timed out';
-            details.push(`llm attempt ${attempt + 1}: timed out`);
+          if (isLlmTimeout(callError)) {
+            timedOut = true;
+            prevTimedOut = true;
+            lastError = callError instanceof Error ? callError.message : 'the LLM request timed out';
+            details.push(`llm attempt ${attempt + 1}: timed out (${lastError})`);
             continue;
           }
           throw callError;
         }
+        timedOut = false;
         details.push(
           `llm: ${Math.round(performance.now() - llmStart)}ms, ${raw.length} chars${attempt > 0 ? ' (retry)' : ''}`,
         );
@@ -193,7 +199,9 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         }
       }
       if (!parsed) {
-        error = `Model did not return valid actions: ${lastError}`;
+        error = timedOut
+          ? `LLM request timed out twice in a row (model too slow for this step) - run aborted. Last error: ${lastError}`
+          : `Model did not return valid actions: ${lastError}`;
         break;
       }
       if (run.stop) {
@@ -272,18 +280,26 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
     if (error) notify(tabId, { type: 'agent.error', message: error });
     else notify(tabId, { type: 'agent.done', summary });
     if (!run.stop && state.narration.length > 0) {
-      try {
-        const answer = await synthesizeAnswer(state);
-        if (answer.trim()) {
-          const history = await getHistory(tabId);
-          history.push({ role: 'assistant', text: answer });
-          await saveHistory(tabId, history);
-          notify(tabId, { type: 'chat.answer', text: answer });
-        }
-      } catch (synthError) {
-        console.info('[agent] answer synthesis failed:', synthError);
-      }
+      void deliverAnswer(tabId, state);
     }
+  }
+}
+
+/** Runs after the run slot is released so a new goal can start immediately. */
+async function deliverAnswer(tabId: number, state: AgentState): Promise<void> {
+  acquireKeepalive();
+  try {
+    const answer = await synthesizeAnswer(state);
+    if (answer.trim()) {
+      const history = await getHistory(tabId);
+      history.push({ role: 'assistant', text: answer });
+      await saveHistory(tabId, history);
+      notify(tabId, { type: 'chat.answer', text: answer });
+    }
+  } catch (synthError) {
+    console.info('[agent] answer synthesis failed:', synthError);
+  } finally {
+    releaseKeepalive();
   }
 }
 
@@ -307,7 +323,14 @@ async function synthesizeAnswer(state: AgentState): Promise<string> {
     },
     { role: 'user', content: `Goal: ${state.goal}\n\nAgent transcript:\n${transcript}` },
   ];
-  return streamChat({ base, apiKey: settings.apiKey, model: settings.model, messages });
+  return streamChat({
+    base,
+    apiKey: settings.apiKey,
+    model: settings.model,
+    messages,
+    firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
+    totalTimeoutMs: settings.llmTotalTimeoutMs,
+  });
 }
 
 function confirmMode(askFirst: boolean): ConfirmMode {
@@ -397,6 +420,8 @@ async function completeOnce(
     model,
     messages,
     signal,
+    firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
+    totalTimeoutMs: settings.llmTotalTimeoutMs,
     extraBody: effort ? { reasoning_effort: effort } : undefined,
   });
 }

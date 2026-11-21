@@ -9,6 +9,8 @@ export interface Settings {
   actModel?: string;
   actReasoningEffort?: string;
   actExtraInstructions?: string;
+  llmFirstTokenTimeoutMs?: number;
+  llmTotalTimeoutMs?: number;
   sttEndpointUrl?: string;
   sttModel?: string;
   ttsAutoRead?: boolean;

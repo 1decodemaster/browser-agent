@@ -7,6 +7,7 @@ export interface ElementInfo {
   kind: 'interactive' | 'content';
   name: string;
   href?: string;
+  fresh?: boolean;
 }
 
 const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'textarea', 'select', 'summary', 'label']);
@@ -40,7 +41,13 @@ export class ElementTable {
   readonly order: number[] = [];
   private nextId = 1;
 
-  add(element: Element, tag: string, kind: 'interactive' | 'content', name: string): number {
+  add(
+    element: Element,
+    tag: string,
+    kind: 'interactive' | 'content',
+    name: string,
+    fresh = false,
+  ): number {
     const id = this.nextId++;
     const role = implicitRole(element, tag);
     this.info.set(id, {
@@ -50,6 +57,7 @@ export class ElementTable {
       kind,
       name,
       href: element instanceof HTMLAnchorElement ? element.href : undefined,
+      ...(fresh ? { fresh: true } : {}),
     });
     this.elements.set(id, element);
     this.idsByElement.set(element, id);
@@ -69,31 +77,38 @@ export class ElementTable {
   }
 }
 
-export function buildElementTable(): ElementTable {
+export function buildElementTable(fresh?: ReadonlySet<Element>): ElementTable {
   const table = new ElementTable();
   const body = document.body;
-  if (body) visit(table, body);
+  if (body) visit(table, body, fresh, false);
   return table;
 }
 
-function visit(table: ElementTable, element: Element): void {
+function visit(
+  table: ElementTable,
+  element: Element,
+  fresh: ReadonlySet<Element> | undefined,
+  inheritedFresh: boolean,
+): void {
   const tag = element.tagName.toLowerCase();
   if (SKIP_TAGS.has(tag)) return;
   if (element.id && HOST_IDS.has(element.id)) return;
 
+  const isFresh = inheritedFresh || (fresh != null && fresh.has(element));
+
   const shadowRoot = (element as HTMLElement).shadowRoot;
   if (shadowRoot) {
-    for (const child of Array.from(shadowRoot.children)) visit(table, child);
+    for (const child of Array.from(shadowRoot.children)) visit(table, child, fresh, isFresh);
   }
 
   const interactive = isInteractive(element, tag);
   const content = CONTENT_TAGS.has(tag);
   if ((interactive || content) && isVisible(element)) {
     const name = accessibleName(element, tag);
-    table.add(element, tag, interactive ? 'interactive' : 'content', name);
+    table.add(element, tag, interactive ? 'interactive' : 'content', name, isFresh);
   }
 
-  for (const child of Array.from(element.children)) visit(table, child);
+  for (const child of Array.from(element.children)) visit(table, child, fresh, isFresh);
 }
 
 const INTERACTIVE_ROLES = [
@@ -197,6 +212,8 @@ function truncate(text: string, max: number): string {
 
 export function serializeTable(table: ElementTable, maxEntries = 280): string {
   const interactiveBudget = 120;
+  const freshBudget = 60;
+  const freshInteractive: string[] = [];
   const interactive: string[] = [];
   const content: string[] = [];
   for (const id of table.order) {
@@ -205,14 +222,26 @@ export function serializeTable(table: ElementTable, maxEntries = 280): string {
     const name = ` "${info.name}"`;
     const href = info.href ? ` -> ${info.href}` : '';
     const line = `[${info.id}] ${info.role}${name}${href}`;
-    (info.kind === 'interactive' ? interactive : content).push(line);
+    if (info.kind === 'interactive') {
+      (info.fresh ? freshInteractive : interactive).push(line);
+    } else {
+      content.push(line);
+    }
   }
-  const picked: string[] = interactive.slice(0, interactiveBudget);
+  const freshShown = freshInteractive.slice(0, freshBudget);
+  const picked: string[] = [...interactive.slice(0, interactiveBudget)];
+  const cap = maxEntries + freshShown.length;
+  if (freshShown.length) {
+    picked.unshift(
+      'Recently appeared (new since the last step - dropdown/popover options you just opened are here):',
+      ...freshShown,
+    );
+  }
   for (const line of content) {
-    if (picked.length >= maxEntries) break;
+    if (picked.length >= cap) break;
     picked.push(line);
   }
-  const total = interactive.length + content.length;
+  const total = freshInteractive.length + interactive.length + content.length;
   if (total > picked.length) {
     picked.push(
       `…(${total - picked.length} more elements not shown - scroll or refine the page to reveal them)`,

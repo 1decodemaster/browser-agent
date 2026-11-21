@@ -6,6 +6,41 @@
 
 ## Current status
 
+- **Extension version:** 0.13.0 (issue #1 fixes: portal dropdowns in the index, LLM timeout
+  rework, post-submit verification). A4 (vision grounding) still next.
+- **v0.13.0 — issue #1 (Kayak flight search: dropdowns never indexed, `signal timed out` death)**:
+  - **Fresh-element pinning in the indexer** (`indexer.ts` + `act.ts`): the MutationObserver now
+    records inserted nodes + attribute-mutated targets (excluding the extension's own hosts and
+    body/html); `observePage()` builds the table with that set, marks those entries `fresh`, and
+    `serializeTable()` pins fresh *interactive* entries (cap 60) at the TOP under a
+    "Recently appeared (new since the last step…)" header, outside the 120/280 budgets. Body-end
+    portals (Kayak's airport suggestion list) now always reach the model. Freshness = "changed
+    since the previous observe", cleared per observe — survives long LLM think times (a
+    time-based window did not: it expired during the 120s+ step calls).
+  - **LLM timeout rework** (`llm.ts`): the single 120s `AbortSignal.timeout` became a
+    **first-token timeout (default 120s) + generous total stream cap (default 600s)**; both
+    configurable via `llmFirstTokenTimeoutMs` / `llmTotalTimeoutMs` settings (Options → endpoint
+    form). Timeouts throw a typed `LlmTimeoutError` ("no response from the model within Ns…" /
+    "stream exceeded Ns in total") — the raw `signal timed out` DOMException never reaches the
+    UI; chat errors and the agent's double-timeout abort carry the specific reason.
+  - **Post-submit verification** (`act.ts` type op): after `submit`, the observation waits 400ms
+    and appends `[post-submit: …]` — the field's post-submit value (or "the field is gone"),
+    plus nearby chip text found by searching the field's captured ancestor chain for the typed
+    text. `submitForm` now dispatches Enter on the field FIRST (autocomplete handlers commit the
+    suggestion + preventDefault) and only falls back to `form.requestSubmit()` — the old
+    requestSubmit-first skipped combobox Enter handlers and navigated on plain forms.
+  - **Agent prompt**: check whether the index already shows the desired state before re-entering
+    values; "Recently appeared" section explained in the autocomplete rule.
+  - **Answer synthesis moved out of the run slot** (`agent.ts`): `activeRuns` is released when
+    the loop ends; `deliverAnswer()` runs independently with its own keepalive — previously a
+    slow synthesis kept the tab "already running" and bounced the next goal.
+  - **E2E harness** (`tests/`): Playwright + Chrome for Testing (MV3 extensions need headed
+    Chrome → Xvfb) loading the built extension; local Kayak-like fixture (budget-exhausting
+    page + body-end portal dropdown + chip commits) and a mock OpenAI SSE server with scripted
+    / delay-first-N / dribble-N models. 32 checks incl. A/B against main's indexer (old code
+    reproduces the issue: dropdown never indexed, run hits the 12-step limit). Panel is driven
+    via its sessionStorage snap persistence + coordinate clicks (closed shadow DOM is not
+    reachable via selectors or CDP DOM traversal).
 - **Extension version:** 0.12.0 (C3 voice: mic STT + TTS). Kayak/MMT retest pending on user's
   machine; flight booking still imperfect (complex unique pages — accepted for now, move on).
 - **Next phase: A4** (vision grounding in observe, Wikipedia-hop e2e test, optional
