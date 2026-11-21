@@ -9,6 +9,9 @@ export interface Settings {
   actModel?: string;
   actReasoningEffort?: string;
   actExtraInstructions?: string;
+  sttEndpointUrl?: string;
+  sttModel?: string;
+  ttsAutoRead?: boolean;
 }
 
 export interface ChatMessage {
@@ -24,6 +27,7 @@ export type RpcRequest =
   | { kind: 'chat:history' }
   | { kind: 'chat:clear' }
   | { kind: 'screenshot:capture' }
+  | { kind: 'voice:transcribe'; audioBase64: string; mimeType: string }
   | { kind: 'agent:get' }
   | { kind: 'agent:debug' }
   | { kind: 'act:observe' }

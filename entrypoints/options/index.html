@@ -49,6 +49,16 @@
         font-size: 13px;
         font-weight: 600;
       }
+      label.checkbox {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        font-weight: 400;
+      }
+      input[type="checkbox"] {
+        width: auto;
+        accent-color: #4f8cff;
+      }
       input {
         font: inherit;
         font-weight: 400;
@@ -195,6 +205,29 @@
         <p class="note">
           <code>reasoning_effort</code> is sent only when set; servers that don't support it may reject the request - if
           act calls fail with HTTP 400, set it back to Default.
+        </p>
+      </form>
+      <h2>Voice</h2>
+      <p class="sub">
+        Chrome has built-in speech recognition (used automatically for the mic button). For Firefox,
+        or as a fallback, point this at a whisper-style OpenAI-compatible STT server.
+      </p>
+      <form id="voiceForm">
+        <label>
+          STT endpoint URL
+          <input id="sttEndpointUrl" type="url" placeholder="http://localhost:8001 (leave empty to disable)" />
+        </label>
+        <label>
+          STT model
+          <input id="sttModel" type="text" placeholder="whisper-1" />
+        </label>
+        <label class="checkbox">
+          <input id="ttsAutoRead" type="checkbox" />
+          Auto-read assistant responses aloud
+        </label>
+        <p class="note">
+          Recorded audio is POSTed to <code>{base}/v1/audio/transcriptions</code> (multipart, with the
+          chat API key if set). The browser asks for microphone permission per site.
         </p>
       </form>
       <div id="status" class="status info"></div>

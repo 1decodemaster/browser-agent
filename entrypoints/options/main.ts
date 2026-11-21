@@ -9,6 +9,9 @@ const actEndpointInput = document.getElementById('actEndpointUrl') as HTMLInputE
 const actModelInput = document.getElementById('actModel') as HTMLInputElement;
 const actEffortSelect = document.getElementById('actReasoningEffort') as HTMLSelectElement;
 const actExtraInput = document.getElementById('actExtraInstructions') as HTMLTextAreaElement;
+const sttEndpointInput = document.getElementById('sttEndpointUrl') as HTMLInputElement;
+const sttModelInput = document.getElementById('sttModel') as HTMLInputElement;
+const ttsAutoReadInput = document.getElementById('ttsAutoRead') as HTMLInputElement;
 const statusEl = document.getElementById('status') as HTMLElement;
 const testButton = document.getElementById('test') as HTMLButtonElement;
 const form = document.getElementById('form') as HTMLFormElement;
@@ -26,6 +29,12 @@ actForm.addEventListener('submit', (event) => {
   void save().then(() => setStatus('Saved.', 'ok'));
 });
 
+const voiceForm = document.getElementById('voiceForm') as HTMLFormElement;
+voiceForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void save().then(() => setStatus('Saved.', 'ok'));
+});
+
 testButton.addEventListener('click', () => void testConnection());
 
 async function load(): Promise<void> {
@@ -37,6 +46,9 @@ async function load(): Promise<void> {
   actModelInput.value = settings.actModel ?? '';
   actEffortSelect.value = settings.actReasoningEffort ?? '';
   actExtraInput.value = settings.actExtraInstructions ?? '';
+  sttEndpointInput.value = settings.sttEndpointUrl ?? '';
+  sttModelInput.value = settings.sttModel ?? '';
+  ttsAutoReadInput.checked = settings.ttsAutoRead === true;
 }
 
 async function collect(): Promise<Settings> {
@@ -51,6 +63,9 @@ async function collect(): Promise<Settings> {
     actModel: actModelInput.value.trim(),
     actReasoningEffort: actEffortSelect.value,
     actExtraInstructions: actExtraInput.value,
+    sttEndpointUrl: sttEndpointInput.value.trim(),
+    sttModel: sttModelInput.value.trim(),
+    ttsAutoRead: ttsAutoReadInput.checked,
   };
 }
 

@@ -1,5 +1,7 @@
+import { browser } from 'wxt/browser';
 import { rpc } from '@/shared/rpc';
-import type { ChatMessage, ChatPortMessage, ScreenshotData } from '@/shared/types';
+import type { ChatMessage, ChatPortMessage, ScreenshotData, Settings } from '@/shared/types';
+import { getSettings } from '@/shared/settings';
 import type { AgentSummary } from '@/shared/protocol';
 import { chatPost, onChatMessage } from './chat-client';
 import { collectPageContext } from './dom-context';
@@ -26,6 +28,7 @@ interface Handles {
   chips: HTMLElement;
   hint: HTMLElement;
   embedButtons: HTMLButtonElement[];
+  mic: HTMLButtonElement;
   dock: HTMLButtonElement;
 }
 
@@ -60,6 +63,35 @@ const DOWNLOAD_SVG =
 
 const CAMERA_SVG =
   '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2 5h2.3l1.2-1.8h5L11.7 5H14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="9" r="2.1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+
+const MIC_SVG =
+  '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="6" y="1.5" width="4" height="7.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+type VoiceState = 'idle' | 'recording' | 'transcribing';
+
+interface VoiceRecognitionResult extends Array<VoiceRecognitionAlternative> {
+  isFinal: boolean;
+}
+interface VoiceRecognitionAlternative {
+  transcript: string;
+}
+interface VoiceRecognitionResultList extends Array<VoiceRecognitionResult> {}
+interface VoiceRecognitionEvent {
+  resultIndex: number;
+  results: VoiceRecognitionResultList;
+}
+interface VoiceRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((event: VoiceRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+}
+type VoiceRecognitionCtor = new () => VoiceRecognitionLike;
 
 export function mountUi(css: string): void {
   if (document.getElementById(HOST_ID) != null) return;
@@ -123,6 +155,8 @@ export function mountUi(css: string): void {
   inputRow.className = 'ba-input-row';
   const cameraBtn = iconButton(CAMERA_SVG, 'Attach screenshot', () => void embedScreenshot());
   cameraBtn.classList.add('ba-camera');
+  const micBtn = iconButton(MIC_SVG, 'Voice input', onMicClick);
+  micBtn.classList.add('ba-mic');
   const input = document.createElement('textarea');
   input.className = 'ba-input';
   input.placeholder = 'Ask about this page…';
@@ -131,7 +165,7 @@ export function mountUi(css: string): void {
   send.className = 'ba-send';
   send.type = 'button';
   send.textContent = 'Send';
-  inputRow.append(cameraBtn, input, send);
+  inputRow.append(cameraBtn, micBtn, input, send);
 
   const resizer = document.createElement('div');
   resizer.className = 'ba-resizer';
@@ -151,8 +185,29 @@ export function mountUi(css: string): void {
     chips,
     hint,
     embedButtons: [cameraBtn],
+    mic: micBtn,
     dock,
   };
+
+  let voiceState: VoiceState = 'idle';
+  let recognition: VoiceRecognitionLike | null = null;
+  let mediaRecorder: MediaRecorder | null = null;
+  let mediaStream: MediaStream | null = null;
+  let audioChunks: Blob[] = [];
+  let voiceBaseText = '';
+  let discardTranscript = false;
+  let currentTtsButton: HTMLButtonElement | null = null;
+  let autoRead = false;
+
+  void getSettings().then((settings) => {
+    autoRead = settings.ttsAutoRead === true;
+  });
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    const change = changes.settings;
+    if (!change) return;
+    autoRead = (change.newValue as Settings | undefined)?.ttsAutoRead === true;
+  });
 
   pill.addEventListener('click', togglePanel);
   pill.addEventListener('mouseenter', revealPill);
@@ -205,6 +260,7 @@ export function mountUi(css: string): void {
   function onSendClick(): void {
     if (agentRunning) {
       chatPost({ type: 'agent.stop' });
+      stopSpeech();
       window.setTimeout(() => {
         if (agentRunning) {
           agentRunning = false;
@@ -216,6 +272,7 @@ export function mountUi(css: string): void {
     }
     if (activeRequestId != null) {
       chatPost({ type: 'chat.stop', requestId: activeRequestId });
+      stopSpeech();
       return;
     }
     void sendMessage();
@@ -223,6 +280,8 @@ export function mountUi(css: string): void {
 
   async function sendMessage(): Promise<void> {
     if (!handles || agentRunning || activeRequestId != null) return;
+    cancelVoice();
+    stopSpeech();
     const text = handles.input.value.trim();
 
     if (text.toLowerCase() === 'help') {
@@ -348,7 +407,8 @@ export function mountUi(css: string): void {
         break;
       }
       case 'chat.answer': {
-        addAssistantMessage(message.text);
+        attachTts(addAssistantMessage(message.text), message.text);
+        if (autoRead) speakText(message.text);
         break;
       }
       case 'agent.step': {
@@ -386,9 +446,14 @@ export function mountUi(css: string): void {
 
   function finalizeAssistant(text: string, stopped: boolean): void {
     if (text) {
-      if (pendingAssistant) pendingAssistant.bubble.innerHTML = renderMarkdown(text);
-      else addAssistantMessage(text);
+      if (pendingAssistant) {
+        pendingAssistant.bubble.innerHTML = renderMarkdown(text);
+        attachTts(pendingAssistant.bubble, text);
+      } else {
+        attachTts(addAssistantMessage(text), text);
+      }
       if (stopped) addNote('(stopped)');
+      else if (autoRead) speakText(text);
     } else {
       pendingAssistant?.bubble.remove();
       addNote(stopped ? 'Stopped.' : 'Empty response.');
@@ -427,6 +492,10 @@ export function mountUi(css: string): void {
     handles.send.textContent = busy ? 'Stop' : 'Send';
     handles.send.classList.toggle('ba-stop', agentRunning);
     for (const button of handles.embedButtons) button.disabled = busy;
+    handles.mic.classList.toggle('ba-recording', voiceState === 'recording');
+    handles.mic.classList.toggle('ba-busy', voiceState === 'transcribing');
+    handles.mic.disabled = busy || voiceState === 'transcribing';
+    handles.mic.title = voiceState === 'recording' ? 'Stop recording' : 'Voice input';
   }
 
   async function restoreAgentState(): Promise<void> {
@@ -461,6 +530,254 @@ export function mountUi(css: string): void {
     }
   }
 
+  function setVoiceState(state: VoiceState): void {
+    voiceState = state;
+    updateComposerState();
+  }
+
+  function onMicClick(): void {
+    if (voiceState === 'recording') {
+      discardTranscript = false;
+      stopVoiceCapture();
+      return;
+    }
+    if (voiceState !== 'idle' || activeRequestId != null || agentRunning) return;
+    void startVoice();
+  }
+
+  async function startVoice(): Promise<void> {
+    if (!handles) return;
+    const native = createNativeRecognition();
+    if (native) {
+      startNativeRecognition(native);
+      return;
+    }
+    const settings = await getSettings();
+    if (settings.sttEndpointUrl) {
+      await startEndpointRecording();
+      return;
+    }
+    addNote(
+      'Voice input needs Chrome or Edge (built-in speech), or an STT endpoint in Options → Voice.',
+    );
+  }
+
+  function createNativeRecognition(): VoiceRecognitionLike | null {
+    const w = window as unknown as {
+      SpeechRecognition?: VoiceRecognitionCtor;
+      webkitSpeechRecognition?: VoiceRecognitionCtor;
+    };
+    const ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!ctor) return null;
+    const instance = new ctor();
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.lang = navigator.language || 'en-US';
+    return instance;
+  }
+
+  function startNativeRecognition(instance: VoiceRecognitionLike): void {
+    if (!handles) return;
+    recognition = instance;
+    voiceBaseText = handles.input.value;
+    discardTranscript = false;
+    let finalText = '';
+    setVoiceState('recording');
+    instance.onresult = (event) => {
+      let interim = '';
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index]!;
+        if (result.isFinal) finalText = `${finalText} ${result[0]!.transcript} `;
+        else interim += result[0]!.transcript;
+      }
+      if (!discardTranscript) applyVoiceText(finalText + interim);
+    };
+    instance.onerror = (event) => {
+      const code = event.error ?? 'unknown';
+      if (code === 'no-speech' || code === 'aborted') return;
+      addNote(
+        `Speech recognition error: ${code}${
+          code === 'not-allowed' ? ' - allow microphone access for this site.' : ''
+        }`,
+      );
+    };
+    instance.onend = () => {
+      recognition = null;
+      setVoiceState('idle');
+    };
+    try {
+      instance.start();
+    } catch (error) {
+      recognition = null;
+      setVoiceState('idle');
+      addNote(
+        `Could not start speech recognition: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  function stopVoiceCapture(): void {
+    if (recognition) {
+      recognition.stop();
+      return;
+    }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      setVoiceState('transcribing');
+      mediaRecorder.stop();
+    }
+  }
+
+  async function startEndpointRecording(): Promise<void> {
+    if (!handles) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      addNote('Audio capture is not available in this browser.');
+      return;
+    }
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      addNote(
+        `Microphone unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        } - allow mic access for this site.`,
+      );
+      return;
+    }
+    audioChunks = [];
+    discardTranscript = false;
+    const recorder = new MediaRecorder(mediaStream);
+    mediaRecorder = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) audioChunks.push(event.data);
+    };
+    recorder.onstop = () => void finishEndpointRecording(recorder.mimeType);
+    recorder.start();
+    setVoiceState('recording');
+  }
+
+  async function finishEndpointRecording(mimeType: string): Promise<void> {
+    mediaStream?.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+    const blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+    audioChunks = [];
+    mediaRecorder = null;
+    if (discardTranscript) {
+      discardTranscript = false;
+      setVoiceState('idle');
+      return;
+    }
+    try {
+      const base64 = await blobToBase64(blob);
+      const text = await rpc<string>({
+        kind: 'voice:transcribe',
+        audioBase64: base64,
+        mimeType: blob.type,
+      });
+      if (!discardTranscript) applyVoiceText(text);
+    } catch (error) {
+      addNote(`Transcription failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setVoiceState('idle');
+    }
+  }
+
+  function applyVoiceText(transcript: string): void {
+    if (!handles) return;
+    const trimmed = transcript.replace(/\s+/g, ' ').trim();
+    if (!trimmed) return;
+    const base = voiceBaseText.trimEnd();
+    handles.input.value = base ? `${base} ${trimmed}` : trimmed;
+    autosize();
+  }
+
+  function cancelVoice(): void {
+    if (voiceState === 'recording') {
+      discardTranscript = true;
+      if (recognition) recognition.abort();
+      else stopVoiceCapture();
+    } else if (voiceState === 'transcribing') {
+      discardTranscript = true;
+    }
+  }
+
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result !== 'string') {
+          reject(new Error('Could not read recorded audio'));
+          return;
+        }
+        resolve(result.slice(result.indexOf(',') + 1));
+      };
+      reader.onerror = () => reject(new Error('Could not read recorded audio'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function makeTtsButton(text: string): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'ba-tts';
+    button.type = 'button';
+    button.title = 'Read aloud';
+    button.textContent = '▶';
+    button.addEventListener('click', () => toggleSpeech(text, button));
+    return button;
+  }
+
+  function attachTts(bubble: HTMLElement, text: string): void {
+    if (bubble.querySelector('.ba-tts')) return;
+    bubble.append(makeTtsButton(text));
+  }
+
+  function toggleSpeech(text: string, button: HTMLButtonElement): void {
+    if (currentTtsButton === button) {
+      stopSpeech();
+      return;
+    }
+    stopSpeech();
+    const spoken = stripMarkdownForSpeech(text);
+    if (!spoken) return;
+    const utterance = new SpeechSynthesisUtterance(spoken);
+    utterance.onend = () => resetTtsButton(button);
+    utterance.onerror = () => resetTtsButton(button);
+    speechSynthesis.speak(utterance);
+    button.textContent = '⏹';
+    button.title = 'Stop reading';
+    currentTtsButton = button;
+  }
+
+  function speakText(text: string): void {
+    const spoken = stripMarkdownForSpeech(text);
+    if (!spoken) return;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+  }
+
+  function stopSpeech(): void {
+    speechSynthesis.cancel();
+    if (currentTtsButton) resetTtsButton(currentTtsButton);
+  }
+
+  function resetTtsButton(button: HTMLButtonElement): void {
+    button.textContent = '▶';
+    button.title = 'Read aloud';
+    if (currentTtsButton === button) currentTtsButton = null;
+  }
+
+  function stripMarkdownForSpeech(text: string): string {
+    return text
+      .replace(/```[\s\S]*?```/g, ' (code omitted) ')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function renderChips(): void {
     if (!handles) return;
     handles.chips.replaceChildren();
@@ -493,7 +810,7 @@ export function mountUi(css: string): void {
           if (message.pageContext) addNote('Page context attached');
           if (message.images?.length) addNote(`${message.images.length} screenshot(s) attached`);
         } else {
-          addAssistantMessage(message.text);
+          attachTts(addAssistantMessage(message.text), message.text);
         }
       }
     } catch {

@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 import { onRpc, type RpcSender } from '@/shared/rpc';
 import { clearHistory, getHistory, watchChatPorts } from './chat';
 import { getAgentSummary, toggleAgentDebug } from './agent';
+import { transcribeAudio } from './voice';
 
 export default defineBackground(() => {
   watchChatPorts();
@@ -15,6 +16,8 @@ export default defineBackground(() => {
         return true;
       case 'screenshot:capture':
         return { dataUrl: await captureScreenshot(requireTab(sender)) };
+      case 'voice:transcribe':
+        return transcribeAudio(request);
       case 'agent:get':
         return getAgentSummary(requireTab(sender));
       case 'agent:debug':

@@ -10,6 +10,9 @@ export const DEFAULT_SETTINGS: Settings = {
   actModel: '',
   actReasoningEffort: '',
   actExtraInstructions: '',
+  sttEndpointUrl: '',
+  sttModel: '',
+  ttsAutoRead: false,
 };
 
 export const settingsItem = storage.defineItem<Settings>('local:settings', {

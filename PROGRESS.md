@@ -6,11 +6,26 @@
 
 ## Current status
 
-- **Extension version:** 0.11.0 (C1 auto page context + C2 camera/multi-screenshot). Kayak/MMT
-  retest pending on user's machine; flight booking still imperfect (complex unique pages —
-  accepted for now, move on).
-- **Next phase: C3 (voice: mic STT + TTS)** — see "Chat context + voice phases" below.
-  A4 (vision grounding, Wikipedia-hop e2e, chrome.debugger trusted input) deferred until after C3.
+- **Extension version:** 0.12.0 (C3 voice: mic STT + TTS). Kayak/MMT retest pending on user's
+  machine; flight booking still imperfect (complex unique pages — accepted for now, move on).
+- **Next phase: A4** (vision grounding in observe, Wikipedia-hop e2e test, optional
+  chrome.debugger trusted input) — C-track done.
+- **v0.12.0 (C3 — Voice)**:
+  - **Mic button** between camera and composer input: click to dictate, click again to stop,
+    Send stays manual (works for chat AND Act goals). Interim transcript renders live in the
+    input (appended to whatever was already typed).
+  - **STT**: Web Speech API (`SpeechRecognition`/`webkitSpeechRecognition`, continuous +
+    interim) when available (Chrome/Edge); fallback = OpenAI-compatible
+    `POST {base}/v1/audio/transcriptions` — MediaRecorder capture → base64 → RPC
+    `voice:transcribe` → `background/voice.ts` posts multipart (`file` + `model`, chat API key
+    if set, 60s timeout). Settings: `sttEndpointUrl`, `sttModel` (Options → Voice). Chrome mic
+    permission is per-site (page origin); Firefox users must configure an STT endpoint.
+  - **TTS**: `speechSynthesis` play button (▶/⏹) on every assistant message (also on restored
+    history + agent-synthesized answers); markdown stripped before speaking (code blocks →
+    "(code omitted)", links → anchor text). "Auto-read responses" toggle in Options
+    (`ttsAutoRead`); playback stops on Send/Stop. Any new play cancels the previous one.
+  - Sending while recording cancels capture (discards late transcripts) but keeps whatever
+    interim text is already in the input.
 - **v0.11.0**:
   - **C1 — HTML button removed**; every chat send auto-attaches a fresh page snapshot captured
     at send time (`collectPageContext()` in dom-context.ts): act indexer outline
@@ -173,14 +188,9 @@
 - [x] **C2 — Camera button + multi-screenshot (v0.11.0)**: done as described above — small
   camera icon in the composer, append-only numbered chips, `screenshots: string[]` protocol with
   one image part per screenshot.
-- [ ] **C3 — Voice (v0.12.0)**: mic button in the composer that fills the input with the
-  transcript — works for chat AND Act goals alike (Send stays manual).
-  - STT: Web Speech API (`webkitSpeechRecognition`) when available (Chrome); fallback =
-    OpenAI-compatible `/v1/audio/transcriptions` (MediaRecorder capture → base64 POST), new
-    settings `sttEndpointUrl` + `sttModel` (blank = disabled). Interim transcript rendered live
-    in the input.
-  - TTS: play button per assistant message via `speechSynthesis` (local voices, both browsers)
-    + optional "auto-read responses" toggle in settings; playback stops on Send/Stop.
+- [x] **C3 — Voice (v0.12.0)**: done as described above — mic button (Web Speech API primary,
+  OpenAI-compatible `/v1/audio/transcriptions` fallback via background RPC), per-message TTS
+  play button + auto-read toggle.
 
 ## Decisions log
 
