@@ -49,6 +49,16 @@ MEMORY_SCHEDULE = [
 
 RECORDS = {}
 
+PLAIN_ANSWER = (
+    'Run completed. The flight search found eight options from DEL to SFO for December 24. '
+    'The cheapest nonstop leaves in the morning and lands in the afternoon, priced around '
+    '412 dollars round trip. A slightly faster option departs at noon with a short layover, '
+    'which costs about thirty dollars more per person. Afternoon and evening departures are '
+    'also available at a small premium, and the red-eye returns at dawn for the budget minded. '
+    'All fares include one carry on bag but charge for checked luggage on the basic economy tier. '
+    'Would you like the full itinerary for any of these flights?'
+)
+
 
 def scripted_actions(prompt: str) -> list:
     entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
@@ -120,7 +130,7 @@ def received_memory(prompt: str) -> str:
 
 def memsched_reply(payload, prompt: str):
     if not is_agent_step(prompt):
-        return json.dumps({'answer': 'Run completed.'}), 'plain'
+        return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
     records = RECORDS.setdefault('memsched', [])
     step_index = sum(1 for record in records if record.get('step'))
     schedule = MEMORY_SCHEDULE[min(step_index, len(MEMORY_SCHEDULE) - 1)]
@@ -256,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
         if is_agent_step(prompt):
             actions, thought = scripted_actions(prompt)
             return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
-        return json.dumps({'answer': 'Run completed.'}), 'plain'
+        return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
 
     def handle_speech(self):
         length = int(self.headers.get('Content-Length', 0))
@@ -264,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         RECORDS.setdefault('tts', []).append({
             'model': payload.get('model'),
             'voice': payload.get('voice'),
-            'input': (payload.get('input') or '')[:120],
+            'input': (payload.get('input') or '')[:500],
             'response_format': payload.get('response_format'),
         })
         del RECORDS['tts'][:-60]

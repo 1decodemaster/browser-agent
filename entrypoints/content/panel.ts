@@ -12,6 +12,53 @@ import { COMMAND_HELP, parseCommand } from './act/commands';
 const HOST_ID = 'browser-agent-root';
 const UI_KEY = '__ba_ui';
 const MIN_SNAP_WIDTH = 280;
+const TTS_FIRST_CHUNK_MAX = 160;
+const TTS_CHUNK_MAX = 320;
+const TTS_PREFETCH = 2;
+
+class FetchError extends Error {
+  constructor(readonly index: number, override readonly cause: unknown) {
+    super(`chunk ${index} failed`);
+  }
+}
+
+function splitSpeechChunks(text: string): string[] {
+  if (text.length <= TTS_CHUNK_MAX) return [text];
+  const sentences = text.split(/(?<=[.!?…])\s+/).filter((part) => part.trim());
+  const chunks: string[] = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const pieces = sentence.length > TTS_CHUNK_MAX
+      ? hardSplit(sentence, TTS_CHUNK_MAX)
+      : [sentence];
+    for (const piece of pieces) {
+      const cap = chunks.length === 0 ? TTS_FIRST_CHUNK_MAX : TTS_CHUNK_MAX;
+      if (!current) {
+        current = piece;
+      } else if (current.length + piece.length + 1 <= cap) {
+        current = `${current} ${piece}`;
+      } else {
+        chunks.push(current.trim());
+        current = piece;
+      }
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.length ? chunks : [text];
+}
+
+function hardSplit(sentence: string, cap: number): string[] {
+  const pieces: string[] = [];
+  let rest = sentence;
+  while (rest.length > cap) {
+    let cut = rest.lastIndexOf(' ', cap);
+    if (cut < cap * 0.5) cut = cap;
+    pieces.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) pieces.push(rest);
+  return pieces;
+}
 
 interface Embed {
   label: string;
@@ -808,40 +855,75 @@ export function mountUi(css: string): void {
       return false;
     }
     if (!settings.ttsEndpointUrl?.trim()) return false;
+    const chunks = splitSpeechChunks(spoken);
+    const pending: Promise<SpeakResult>[] = [];
+    let nextToFetch = 0;
+    const startFetches = (): void => {
+      while (nextToFetch < chunks.length && pending.length <= TTS_PREFETCH) {
+        const index = nextToFetch++;
+        const text = chunks[index]!;
+        pending.push(
+          rpc<SpeakResult>({ kind: 'voice:speak', text }).catch((error) => {
+            throw new FetchError(index, error);
+          }),
+        );
+      }
+    };
+    let playedAny = false;
     try {
-      const { audioBase64, mimeType } = await rpc<SpeakResult>({
-        kind: 'voice:speak',
-        text: spoken,
-      });
-      if (token !== ttsToken) return true;
-      const blob = new Blob([base64ToBytes(audioBase64)], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      const cleanup = () => {
-        if (currentAudio === audio) currentAudio = null;
-        if (currentAudioUrl === url) {
-          URL.revokeObjectURL(url);
-          currentAudioUrl = null;
+      startFetches();
+      for (let index = 0; index < chunks.length; index++) {
+        const { audioBase64, mimeType } = await pending.shift()!;
+        if (token !== ttsToken) return true;
+        const blob = new Blob([base64ToBytes(audioBase64)], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        const cleanup = () => {
+          if (currentAudio === audio) currentAudio = null;
+          if (currentAudioUrl === url) {
+            URL.revokeObjectURL(url);
+            currentAudioUrl = null;
+          }
+        };
+        audio.addEventListener('ended', cleanup);
+        audio.addEventListener('error', cleanup);
+        currentAudio = audio;
+        currentAudioUrl = url;
+        if (index === 0 && button) {
+          button.textContent = '⏹';
+          button.title = 'Stop reading';
         }
-        if (button) resetTtsButton(button);
-      };
-      audio.addEventListener('ended', cleanup);
-      audio.addEventListener('error', cleanup);
-      currentAudio = audio;
-      currentAudioUrl = url;
-      await audio.play();
-      if (button) {
-        button.textContent = '⏹';
-        button.title = 'Stop reading';
+        await playAudio(audio);
+        playedAny = true;
+        startFetches();
       }
       return true;
     } catch (error) {
+      if (token !== ttsToken) return true;
+      if (error instanceof FetchError && error.index === 0 && !playedAny) {
+        console.warn(
+          '[panel] TTS endpoint failed; falling back to built-in speech:',
+          error.cause instanceof Error ? error.cause.message : error.cause,
+        );
+        return false;
+      }
       console.warn(
-        '[panel] TTS endpoint failed; falling back to built-in speech:',
+        '[panel] TTS read stopped early (chunk failed):',
         error instanceof Error ? error.message : error,
       );
-      return false;
+      if (button) resetTtsButton(button);
+      return true;
     }
+  }
+
+  function playAudio(audio: HTMLAudioElement): Promise<void> {
+    return new Promise((resolvePromise, rejectPromise) => {
+      audio.addEventListener('ended', () => resolvePromise(), { once: true });
+      audio.addEventListener('error', () => rejectPromise(new Error('audio playback failed')), {
+        once: true,
+      });
+      audio.play().catch(rejectPromise);
+    });
   }
 
   function stopSpeech(): void {

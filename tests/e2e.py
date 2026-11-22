@@ -25,6 +25,7 @@ Scenarios:
 """
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -32,6 +33,9 @@ import time
 import urllib.request
 
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mock_llm import PLAIN_ANSWER  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXT = os.environ.get('BA_E2E_EXT', os.path.join(ROOT, '.output', 'chrome-mv3'))
@@ -600,10 +604,19 @@ def t10_endpoint_tts(h):
         time.sleep(0.4)
     check('t10 speech request reached the endpoint', bool(records), 'no /v1/audio/speech call')
     if records:
-        last = records[-1]
+        first = records[0]
         check('t10 model+voice of preference sent',
-              last.get('model') == 'kokoro' and last.get('voice') == 'af_heart', str(last))
-        check('t10 spoken text is the answer', 'Run completed' in (last.get('input') or ''), str(last))
+              first.get('model') == 'kokoro' and first.get('voice') == 'af_heart', str(first))
+        check('t10 first chunk is short (fast first word)',
+              len(first.get('input') or '') <= 160 and 'Run completed' in (first.get('input') or ''),
+              str(first))
+        check('t10 long answer split into multiple chunks', len(records) >= 3, str(len(records)))
+        check('t10 chunk sizes bounded', all(len(r.get('input') or '') <= 320 for r in records),
+              str([len(r.get('input') or '') for r in records]))
+        joined = ' '.join(r.get('input') or '' for r in records)
+        expected = re.sub(r'\s+', ' ', '{"answer": "' + PLAIN_ANSWER + '"}').strip()
+        check('t10 chunks concatenate to the full text in order', joined == expected,
+              f'got {len(joined)} chars, want {len(expected)}')
 
     # endpoint down -> built-in speech fallback, chat still works
     h.set_settings(ttsEndpointUrl='http://127.0.0.1:9999')

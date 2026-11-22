@@ -6,7 +6,23 @@
 
 ## Current status
 
-- **Extension version:** 0.15.0 (endpoint TTS + agent-loop doc). A4 (vision grounding) next.
+- **Extension version:** 0.15.1 (chunked endpoint TTS). A4 (vision grounding) next.
+- **v0.15.1 — chunked TTS for fast first word**:
+  - `speakWithEndpoint` splits the spoken text into sentence-ish chunks
+    (`splitSpeechChunks`: split on `[.!?…]` + whitespace, merge to bounds — first chunk ≤160
+    chars for low time-to-first-audio, later chunks ≤320; over-long sentences hard-split at
+    word boundaries). Numbers like 3.14 and abbreviations don't split (whitespace required
+    after the punctuation).
+  - **Pipelined playback**: fetch chunk 0 → play immediately while up to 2 more chunks are in
+    flight (`TTS_PREFETCH`); `ended → play next` from the prefetch queue (fetches start in
+    order, queue order == chunk order), so playback is seamless with no inter-chunk fetch gap
+    in the common case. Blob URLs revoked per chunk; `currentAudio` tracked so Stop pauses
+    instantly; token guard discards stale results.
+  - **Failure semantics**: chunk 0 fails → full fallback to built-in `speechSynthesis` (unchanged
+    UX); a later chunk fails → stop cleanly with a console warning (no mid-read voice switch).
+  - E2E: mock records per-chunk requests; T10 asserts first chunk ≤160 with the answer start,
+    ≥3 chunks for a ~700-char answer, each ≤320, and the chunks concatenating back to the exact
+    full text in order. Suite at 66/66.
 - **v0.15.0 — endpoint TTS (voice of preference) + docs**:
   - **TTS endpoint** (`voice:speak` RPC → `background/voice.ts` `synthesizeSpeech`): OpenAI-compatible
     `POST {base}/v1/audio/speech` with `{model, input, voice, response_format:'mp3'}` — Kokoro served
