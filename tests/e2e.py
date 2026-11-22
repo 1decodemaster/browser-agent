@@ -114,7 +114,9 @@ class Harness:
             else self.context.wait_for_event('serviceworker')
         self.sw_logs = []
         self.sw.on('console', lambda m: self.sw_logs.append(m.text))
+        self.page_logs = []
         self.page = self.context.new_page()
+        self.page.on('console', lambda m: self.page_logs.append(m.text))
         self.page.goto(FIXTURE_URL)
         self.page.wait_for_load_state('load')
         self.tab_id = self._tab_id()
@@ -264,6 +266,7 @@ def run_tests():
             t7_memory_flag_off(h)
             t8_answer_fallback(h)
             t9_panel_reconnect(h)
+            t10_endpoint_tts(h)
         finally:
             h.context.close()
 
@@ -571,6 +574,55 @@ def t9_panel_reconnect(h):
     check('t9 agent.done/chat.answer never dropped',
           all('agent.done' not in line and 'chat.answer' not in line for line in dropped),
           str(dropped[-3:]))
+
+
+def t10_endpoint_tts(h):
+    print('\nT10: endpoint TTS (voice:speak) + fallback to built-in speech')
+    h.set_settings(
+        model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+        llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None,
+        ttsEndpointUrl=LLM_URL, ttsModel='kokoro', ttsVoice='af_heart', ttsAutoRead=True,
+    )
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.send_text('Say OK.')
+    deadline = time.time() + 30
+    records = []
+    while time.time() < deadline and not records:
+        try:
+            records = json.load(urllib.request.urlopen(
+                MOCK_DEBUG + '/debug/requests?model=tts', timeout=5))
+        except Exception:
+            records = []
+        time.sleep(0.4)
+    check('t10 speech request reached the endpoint', bool(records), 'no /v1/audio/speech call')
+    if records:
+        last = records[-1]
+        check('t10 model+voice of preference sent',
+              last.get('model') == 'kokoro' and last.get('voice') == 'af_heart', str(last))
+        check('t10 spoken text is the answer', 'Run completed' in (last.get('input') or ''), str(last))
+
+    # endpoint down -> built-in speech fallback, chat still works
+    h.set_settings(ttsEndpointUrl='http://127.0.0.1:9999')
+    h.send_text('Say OK again.')
+    deadline = time.time() + 30
+    warned = False
+    grew = False
+    while time.time() < deadline and not (warned and grew):
+        warned = warned or any('TTS endpoint failed' in line for line in h.page_logs)
+        history = h.sw.evaluate(
+            "async (tabId) => (await chrome.storage.session.get('chat:' + tabId))['chat:' + tabId]",
+            h.tab_id,
+        ) or []
+        grew = grew or len(history) >= 4
+        time.sleep(0.4)
+    check('t10 endpoint failure falls back with a warning', warned,
+          'no fallback warning in page console')
+    check('t10 second chat reply arrived', grew, 'history did not grow after the second send')
+    h.set_settings(ttsEndpointUrl='', ttsAutoRead=False)
 
 
 def t4_timeouts(h):

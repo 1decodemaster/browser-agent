@@ -244,13 +244,27 @@
           STT model
           <input id="sttModel" type="text" placeholder="whisper-1" />
         </label>
+        <label>
+          TTS endpoint URL
+          <input id="ttsEndpointUrl" type="url" placeholder="http://localhost:8880 (empty = built-in browser voices)" />
+        </label>
+        <label>
+          TTS model
+          <input id="ttsModel" type="text" placeholder="kokoro" />
+        </label>
+        <label>
+          TTS voice
+          <input id="ttsVoice" type="text" placeholder="af_heart (server default if empty)" />
+        </label>
         <label class="checkbox">
           <input id="ttsAutoRead" type="checkbox" />
           Auto-read assistant responses aloud
         </label>
         <p class="note">
           Recorded audio is POSTed to <code>{base}/v1/audio/transcriptions</code> (multipart, with the
-          chat API key if set). The browser asks for microphone permission per site.
+          chat API key if set). Read-aloud calls <code>{base}/v1/audio/speech</code> with
+          <code>{model, input, voice}</code> - Kokoro served locally (uvicorn/fastapi) works as is.
+          The browser asks for microphone permission per site.
         </p>
       </form>
       <div id="status" class="status info"></div>

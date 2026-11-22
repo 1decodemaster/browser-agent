@@ -6,8 +6,27 @@
 
 ## Current status
 
-- **Extension version:** 0.14.0 (experimental agent working memory + self-managed reasoning
-  effort; default OFF). A4 (vision grounding) still next.
+- **Extension version:** 0.15.0 (endpoint TTS + agent-loop doc). A4 (vision grounding) next.
+- **v0.15.0 — endpoint TTS (voice of preference) + docs**:
+  - **TTS endpoint** (`voice:speak` RPC → `background/voice.ts` `synthesizeSpeech`): OpenAI-compatible
+    `POST {base}/v1/audio/speech` with `{model, input, voice, response_format:'mp3'}` — Kokoro served
+    via uvicorn/fastapi works as is. Settings: `ttsEndpointUrl`, `ttsModel` (default 'kokoro'),
+    `ttsVoice` (voice of preference, e.g. `af_heart`; omitted → server default), uses the chat API key.
+    Audio returns base64 → blob URL → `HTMLAudioElement`; 60s timeout; errors logged and the panel
+    falls back to built-in `speechSynthesis`.
+  - **Playback state machine** (panel.ts): token-guarded (`ttsToken`) stop semantics so a Stop during
+    the fetch/play window can't resurrect audio; play button shows `…` while loading, `⏹` while playing;
+    object URLs revoked on stop/end/error; both the per-message ▶ button and auto-read go through the
+    same path (endpoint first, browser voices fallback).
+  - **STT path fixed** to the standard `{base}/v1/audio/transcriptions` (was missing `/v1`).
+  - **Options → Voice**: TTS endpoint/model/voice fields + updated notes.
+  - **Docs**: `docs/agent-loop.md` — the full Observe→Think→Act flow with file/function references.
+  - **E2E**: mock `/v1/audio/speech` (generates a real WAV, records model/voice/input); T10 asserts the
+    auto-read chain reaches the endpoint with the configured voice and that a dead endpoint falls back
+    to built-in speech with a console warning while chat keeps working. Suite at 63/63.
+- **v0.14.x**: working memory/effort (v0.14.0, experimental flag `agentWorkingMemory`); `[llm] POST`
+  request logging + endpoint-in-errors (v0.14.1); answer-delivery fallback to the run summary (v0.14.2);
+  eager panel port connect + finish catch-up (v0.14.3).
 - **v0.14.0 — agent working memory + self-managed reasoning effort (experimental, default off)**:
   - Flag `agentWorkingMemory` (Options → Act mode, off by default). Off = byte-identical v0.13.1
     behavior. All work on the `fix/issue-1-kayak-dropdown-timeout` branch, unmerged.

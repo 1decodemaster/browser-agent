@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import { rpc } from '@/shared/rpc';
-import type { ChatMessage, ChatPortMessage, ScreenshotData, Settings } from '@/shared/types';
+import type { ChatMessage, ChatPortMessage, SpeakResult, ScreenshotData, Settings } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
 import type { AgentSummary } from '@/shared/protocol';
 import { chatPost, ensureChatPort, onChatMessage } from './chat-client';
@@ -198,6 +198,9 @@ export function mountUi(css: string): void {
   let voiceBaseText = '';
   let discardTranscript = false;
   let currentTtsButton: HTMLButtonElement | null = null;
+  let currentAudio: HTMLAudioElement | null = null;
+  let currentAudioUrl: string | null = null;
+  let ttsToken = 0;
   let autoRead = false;
 
   void getSettings().then((settings) => {
@@ -767,24 +770,91 @@ export function mountUi(css: string): void {
     stopSpeech();
     const spoken = stripMarkdownForSpeech(text);
     if (!spoken) return;
-    const utterance = new SpeechSynthesisUtterance(spoken);
-    utterance.onend = () => resetTtsButton(button);
-    utterance.onerror = () => resetTtsButton(button);
-    speechSynthesis.speak(utterance);
-    button.textContent = '⏹';
-    button.title = 'Stop reading';
     currentTtsButton = button;
+    button.textContent = '…';
+    button.title = 'Loading audio…';
+    const token = ttsToken;
+    void speakWithEndpoint(spoken, button, token).then((played) => {
+      if (token !== ttsToken || played) return;
+      const utterance = new SpeechSynthesisUtterance(spoken);
+      utterance.onend = () => resetTtsButton(button);
+      utterance.onerror = () => resetTtsButton(button);
+      speechSynthesis.speak(utterance);
+      button.textContent = '⏹';
+      button.title = 'Stop reading';
+    });
   }
 
   function speakText(text: string): void {
+    stopSpeech();
     const spoken = stripMarkdownForSpeech(text);
     if (!spoken) return;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+    const token = ttsToken;
+    void speakWithEndpoint(spoken, null, token).then((played) => {
+      if (token !== ttsToken || played) return;
+      speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+    });
+  }
+
+  async function speakWithEndpoint(
+    spoken: string,
+    button: HTMLButtonElement | null,
+    token: number,
+  ): Promise<boolean> {
+    let settings: Settings;
+    try {
+      settings = await getSettings();
+    } catch {
+      return false;
+    }
+    if (!settings.ttsEndpointUrl?.trim()) return false;
+    try {
+      const { audioBase64, mimeType } = await rpc<SpeakResult>({
+        kind: 'voice:speak',
+        text: spoken,
+      });
+      if (token !== ttsToken) return true;
+      const blob = new Blob([base64ToBytes(audioBase64)], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      const cleanup = () => {
+        if (currentAudio === audio) currentAudio = null;
+        if (currentAudioUrl === url) {
+          URL.revokeObjectURL(url);
+          currentAudioUrl = null;
+        }
+        if (button) resetTtsButton(button);
+      };
+      audio.addEventListener('ended', cleanup);
+      audio.addEventListener('error', cleanup);
+      currentAudio = audio;
+      currentAudioUrl = url;
+      await audio.play();
+      if (button) {
+        button.textContent = '⏹';
+        button.title = 'Stop reading';
+      }
+      return true;
+    } catch (error) {
+      console.warn(
+        '[panel] TTS endpoint failed; falling back to built-in speech:',
+        error instanceof Error ? error.message : error,
+      );
+      return false;
+    }
   }
 
   function stopSpeech(): void {
+    ttsToken++;
     speechSynthesis.cancel();
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio = null;
+    }
+    if (currentAudioUrl) {
+      URL.revokeObjectURL(currentAudioUrl);
+      currentAudioUrl = null;
+    }
     if (currentTtsButton) resetTtsButton(currentTtsButton);
   }
 
@@ -804,6 +874,15 @@ export function mountUi(css: string): void {
       .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
   }
 
   function renderChips(): void {

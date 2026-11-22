@@ -11,6 +11,9 @@ const actEffortSelect = document.getElementById('actReasoningEffort') as HTMLSel
 const actExtraInput = document.getElementById('actExtraInstructions') as HTMLTextAreaElement;
 const sttEndpointInput = document.getElementById('sttEndpointUrl') as HTMLInputElement;
 const sttModelInput = document.getElementById('sttModel') as HTMLInputElement;
+const ttsEndpointInput = document.getElementById('ttsEndpointUrl') as HTMLInputElement;
+const ttsModelInput = document.getElementById('ttsModel') as HTMLInputElement;
+const ttsVoiceInput = document.getElementById('ttsVoice') as HTMLInputElement;
 const ttsAutoReadInput = document.getElementById('ttsAutoRead') as HTMLInputElement;
 const firstTokenTimeoutInput = document.getElementById('llmFirstTokenTimeoutMs') as HTMLInputElement;
 const totalTimeoutInput = document.getElementById('llmTotalTimeoutMs') as HTMLInputElement;
@@ -51,6 +54,9 @@ async function load(): Promise<void> {
   actExtraInput.value = settings.actExtraInstructions ?? '';
   sttEndpointInput.value = settings.sttEndpointUrl ?? '';
   sttModelInput.value = settings.sttModel ?? '';
+  ttsEndpointInput.value = settings.ttsEndpointUrl ?? '';
+  ttsModelInput.value = settings.ttsModel ?? '';
+  ttsVoiceInput.value = settings.ttsVoice ?? '';
   ttsAutoReadInput.checked = settings.ttsAutoRead === true;
   firstTokenTimeoutInput.value =
     settings.llmFirstTokenTimeoutMs != null ? String(settings.llmFirstTokenTimeoutMs) : '';
@@ -73,6 +79,9 @@ async function collect(): Promise<Settings> {
     actExtraInstructions: actExtraInput.value,
     sttEndpointUrl: sttEndpointInput.value.trim(),
     sttModel: sttModelInput.value.trim(),
+    ttsEndpointUrl: ttsEndpointInput.value.trim(),
+    ttsModel: ttsModelInput.value.trim(),
+    ttsVoice: ttsVoiceInput.value.trim(),
     ttsAutoRead: ttsAutoReadInput.checked,
     llmFirstTokenTimeoutMs: parseTimeout(firstTokenTimeoutInput.value),
     llmTotalTimeoutMs: parseTimeout(totalTimeoutInput.value),

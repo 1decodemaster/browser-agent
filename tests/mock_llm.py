@@ -19,10 +19,14 @@ Behaviors are selected via the model name in the request:
 Debug: GET /debug/requests?model=<name> - recorded request facts;
        GET /debug/reset - clear records.
 """
+import io
 import json
+import math
 import re
+import struct
 import sys
 import time
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -186,6 +190,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if self.path.startswith('/v1/audio/speech'):
+            return self.handle_speech()
         if not self.path.startswith('/v1/chat/completions'):
             self.send_error(404)
             return
@@ -251,6 +257,37 @@ class Handler(BaseHTTPRequestHandler):
             actions, thought = scripted_actions(prompt)
             return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
         return json.dumps({'answer': 'Run completed.'}), 'plain'
+
+    def handle_speech(self):
+        length = int(self.headers.get('Content-Length', 0))
+        payload = json.loads(self.rfile.read(length) or b'{}')
+        RECORDS.setdefault('tts', []).append({
+            'model': payload.get('model'),
+            'voice': payload.get('voice'),
+            'input': (payload.get('input') or '')[:120],
+            'response_format': payload.get('response_format'),
+        })
+        del RECORDS['tts'][:-60]
+        wav = tiny_wav()
+        self.send_response(200)
+        self.send_header('Content-Type', 'audio/wav')
+        self.send_header('Content-Length', str(len(wav)))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(wav)
+
+
+def tiny_wav(seconds=0.3, freq=440, rate=8000):
+    buffer = io.BytesIO()
+    with wave.open(buffer, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        frames = bytearray()
+        for i in range(int(rate * seconds)):
+            frames += struct.pack('<h', int(12000 * math.sin(2 * math.pi * freq * i / rate)))
+        wav.writeframes(bytes(frames))
+    return buffer.getvalue()
 
 
 if __name__ == '__main__':

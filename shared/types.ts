@@ -14,6 +14,9 @@ export interface Settings {
   agentWorkingMemory?: boolean;
   sttEndpointUrl?: string;
   sttModel?: string;
+  ttsEndpointUrl?: string;
+  ttsModel?: string;
+  ttsVoice?: string;
   ttsAutoRead?: boolean;
 }
 
@@ -31,11 +34,17 @@ export type RpcRequest =
   | { kind: 'chat:clear' }
   | { kind: 'screenshot:capture' }
   | { kind: 'voice:transcribe'; audioBase64: string; mimeType: string }
+  | { kind: 'voice:speak'; text: string }
   | { kind: 'agent:get' }
   | { kind: 'agent:debug' }
   | { kind: 'act:observe' }
   | { kind: 'act:execute'; actions: ActionOp[]; confirmMode: ConfirmMode }
   | { kind: 'panel:toggle' };
+
+export interface SpeakResult {
+  audioBase64: string;
+  mimeType: string;
+}
 
 export interface ScreenshotData {
   dataUrl: string;
