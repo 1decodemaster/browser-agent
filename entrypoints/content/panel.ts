@@ -3,7 +3,7 @@ import { rpc } from '@/shared/rpc';
 import type { ChatMessage, ChatPortMessage, ScreenshotData, Settings } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
 import type { AgentSummary } from '@/shared/protocol';
-import { chatPost, onChatMessage } from './chat-client';
+import { chatPost, ensureChatPort, onChatMessage } from './chat-client';
 import { collectPageContext } from './dom-context';
 import { renderMarkdown } from './markdown';
 import { isActMode, isAskFirst, onActModeChange, setActMode, setAskFirst, executeActions } from './act/act';
@@ -43,6 +43,7 @@ let activeRequestId: string | null = null;
 let pendingAssistant: { bubble: HTMLElement; text: string } | null = null;
 let pendingReasoning: { bubble: HTMLElement; text: string } | null = null;
 let agentRunning = false;
+let renderedMessageCount = 0;
 let snapped = false;
 let snapWidth = 380;
 let savedHtmlMargin: string | null = null;
@@ -232,6 +233,7 @@ export function mountUi(css: string): void {
   });
 
   onChatMessage(route);
+  ensureChatPort();
   log.addEventListener('click', (event) => {
     const anchor = (event.target as HTMLElement | null)?.closest?.('a');
     if (!anchor) return;
@@ -508,11 +510,37 @@ export function mountUi(css: string): void {
         updateComposerState();
         addNote(`Agent running: "${state.goal}" (step ${state.step})`);
         for (const line of state.narration.slice(-10)) addNote(line);
+        // If the run finishes while notifications were lost across a
+        // navigation (no port yet), catch up once: render the finish and any
+        // answer that was saved after this panel loaded its history.
+        window.setTimeout(() => void catchUpAfterRestore(), 2500);
       } else if (state.status === 'finished' && state.goal) {
         addNote(
           `Last agent run: "${state.goal}" (step ${state.step}) — type "agent log" to replay.`,
         );
       }
+    } catch {
+      return;
+    }
+  }
+
+  async function catchUpAfterRestore(): Promise<void> {
+    if (!handles || !agentRunning) return;
+    try {
+      const state = await rpc<AgentSummary>({ kind: 'agent:get' });
+      if (!handles || !agentRunning) return;
+      if (state.status !== 'finished') return;
+      agentRunning = false;
+      updateComposerState();
+      const last = state.narration[state.narration.length - 1];
+      if (last) addNote(last);
+      const messages = await rpc<ChatMessage[]>({ kind: 'chat:history' });
+      for (const message of messages.slice(renderedMessageCount)) {
+        if (message.role === 'assistant' && message.text) {
+          attachTts(addAssistantMessage(message.text), message.text);
+        }
+      }
+      renderedMessageCount = messages.length;
     } catch {
       return;
     }
@@ -804,6 +832,7 @@ export function mountUi(css: string): void {
   async function loadHistory(): Promise<void> {
     try {
       const messages = await rpc<ChatMessage[]>({ kind: 'chat:history' });
+      renderedMessageCount = messages.length;
       for (const message of messages) {
         if (message.role === 'user') {
           addUserMessage(message.text || '(page content attached)');

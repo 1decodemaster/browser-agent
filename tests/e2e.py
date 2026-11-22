@@ -112,6 +112,8 @@ class Harness:
             " JSON.stringify({ snapped: true, snapWidth: 380 })); } catch {}")
         self.sw = self.context.service_workers[0] if self.context.service_workers \
             else self.context.wait_for_event('serviceworker')
+        self.sw_logs = []
+        self.sw.on('console', lambda m: self.sw_logs.append(m.text))
         self.page = self.context.new_page()
         self.page.goto(FIXTURE_URL)
         self.page.wait_for_load_state('load')
@@ -261,6 +263,7 @@ def run_tests():
             t6_working_memory(h)
             t7_memory_flag_off(h)
             t8_answer_fallback(h)
+            t9_panel_reconnect(h)
         finally:
             h.context.close()
 
@@ -540,6 +543,34 @@ def t8_answer_fallback(h):
     # restore
     h.set_settings(model='scripted', llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
     h.disable_act()
+
+
+def t9_panel_reconnect(h):
+    print('\nT9: notifications survive a mid-run navigation (eager panel port)')
+    goal = 'Search for flights from DEL to SFO for Dec 24'
+    h.set_settings(model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    # navigate mid-run exactly like a real search flow would; the panel
+    # remounts on the new page and must re-register its notification port
+    h.page.goto(FIXTURE_URL + '?midrun=1')
+    h.wait_ready()
+    state = h.wait_agent_finished(timeout=120)
+    narration = '\n'.join(state.get('narration', []))
+    check('t9 run finished after mid-run navigation', 'Error' not in narration, narration[-300:])
+    answer = wait_chat_answer(h, timeout=20, contains='Flight search completed')
+    check('t9 answer delivered to chat after navigation', answer is not None, f'{answer!r}')
+    dropped = [line for line in h.sw_logs if 'notification dropped' in line]
+    check('t9 agent.done/chat.answer never dropped',
+          all('agent.done' not in line and 'chat.answer' not in line for line in dropped),
+          str(dropped[-3:]))
 
 
 def t4_timeouts(h):

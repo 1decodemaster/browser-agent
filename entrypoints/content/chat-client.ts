@@ -10,6 +10,12 @@ export function onChatMessage(callback: (message: ChatPortMessage) => void): voi
   handler = callback;
 }
 
+/** Connect (or re-connect) the port eagerly so the background can push
+ * notifications (agent steps, done, answers) to this panel. */
+export function ensureChatPort(): void {
+  getPort();
+}
+
 export function chatPost(message: ChatPortMessage): void {
   getPort().postMessage(message);
 }

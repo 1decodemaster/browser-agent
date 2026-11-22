@@ -47,7 +47,7 @@ const AGENT_SYSTEM_LINES = [
   '{"v":1,"thought":"short reasoning","actions":[...]}',
   'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
   'Before setting a value, check whether the index already shows the desired state (e.g. a button or chip already labeled with the target date, city, or passenger count) - if it does, act on that element instead of re-entering the value.',
-  'Rules: 1-3 actions per step. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
+  'Rules: 1-3 actions per step. "navigate" must be the LAST action of a step - the next step observes the new page, so never batch extract/wait/click after it. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
 ];
 
 const SCHEMA_V1 = '{"v":1,"thought":"short reasoning","actions":[...]}';
@@ -152,7 +152,12 @@ export function removeAgentState(tabId: number): void {
 }
 
 function notify(tabId: number, message: ChatPortMessage): void {
-  getTabPort(tabId)?.postMessage(message);
+  const port = getTabPort(tabId);
+  if (!port) {
+    console.info(`[agent] tab=${tabId} no panel port; notification dropped: ${message.type}`);
+    return;
+  }
+  port.postMessage(message);
 }
 
 async function runLoop(tabId: number, run: RunHandle): Promise<void> {
