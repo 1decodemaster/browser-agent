@@ -271,6 +271,7 @@ def run_tests():
             t8_answer_fallback(h)
             t9_panel_reconnect(h)
             t10_endpoint_tts(h)
+            t11_tts_pipeline(h)
         finally:
             h.context.close()
 
@@ -580,6 +581,71 @@ def t9_panel_reconnect(h):
           str(dropped[-3:]))
 
 
+def t11_tts_pipeline(h):
+    print('\nT11: chunked TTS pipeline (staged prefetch, play-on-arrival, natural pause)')
+    h.set_settings(
+        model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+        llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None,
+        ttsEndpointUrl=LLM_URL, ttsModel='kokoro', ttsVoice='slow-1.2', ttsAutoRead=True,
+    )
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.send_text('Say OK.')
+    records = wait_stable_tts_records(h, min_count=4, timeout=45, stable_secs=2.0)
+    check('t11 multiple chunk requests served', len(records) >= 4, str(len(records)))
+    if len(records) >= 3:
+        recv = [r['received_t'] for r in records]
+        check('t11 first chunk fires alone (batching servers keep TTFA)',
+              recv[1] - recv[0] >= 0.7, f'gap {recv[1] - recv[0]:.2f}s')
+        check('t11 no upfront burst: refills track pipeline progress',
+              recv[2] - recv[0] >= 0.7 and recv[3] - recv[0] >= 0.7,
+              f'recv offsets {[round(t - recv[0], 2) for t in recv]}')
+        expected = re.sub(r'\s+', ' ', '{"answer": "' + PLAIN_ANSWER + '"}').strip()
+        check('t11 chunks cover the full text in order',
+              ordered_chunks(records, expected) == expected,
+              f'got {len(ordered_chunks(records, expected))} chars, want {len(expected)}')
+    h.set_settings(ttsVoice='af_heart', ttsAutoRead=False)
+
+
+def wait_stable_tts_records(h, min_count=1, timeout=30, stable_secs=1.5):
+    """Poll mock speech records until the count stops growing (the pipeline
+    may still be mid-flight; concurrent refills also land in thread order)."""
+    records = []
+    last_count = -1
+    changed_at = time.time()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            records = json.load(urllib.request.urlopen(
+                MOCK_DEBUG + '/debug/requests?model=tts', timeout=5))
+        except Exception:
+            records = []
+        if len(records) >= min_count and len(records) == last_count \
+                and time.time() - changed_at >= stable_secs:
+            break
+        if len(records) != last_count:
+            last_count = len(records)
+            changed_at = time.time()
+        time.sleep(0.3)
+    return records
+
+
+def ordered_chunks(records, expected):
+    """Records arrive in thread order; reorder middle chunks by their position
+    in the expected text (the client's playback order is FIFO by design)."""
+    if not records:
+        return ''
+    head = records[0].get('input') or ''
+    middle = sorted(
+        (r.get('input') or '' for r in records[1:]),
+        key=lambda text: expected.find(text),
+    )
+    return ' '.join([head, *middle])
+
+
 def t10_endpoint_tts(h):
     print('\nT10: endpoint TTS (voice:speak) + fallback to built-in speech')
     h.set_settings(
@@ -593,15 +659,7 @@ def t10_endpoint_tts(h):
     h.wait_ready()
     time.sleep(0.3)
     h.send_text('Say OK.')
-    deadline = time.time() + 30
-    records = []
-    while time.time() < deadline and not records:
-        try:
-            records = json.load(urllib.request.urlopen(
-                MOCK_DEBUG + '/debug/requests?model=tts', timeout=5))
-        except Exception:
-            records = []
-        time.sleep(0.4)
+    records = wait_stable_tts_records(h, min_count=3)
     check('t10 speech request reached the endpoint', bool(records), 'no /v1/audio/speech call')
     if records:
         first = records[0]
@@ -613,10 +671,10 @@ def t10_endpoint_tts(h):
         check('t10 long answer split into multiple chunks', len(records) >= 3, str(len(records)))
         check('t10 chunk sizes bounded', all(len(r.get('input') or '') <= 320 for r in records),
               str([len(r.get('input') or '') for r in records]))
-        joined = ' '.join(r.get('input') or '' for r in records)
         expected = re.sub(r'\s+', ' ', '{"answer": "' + PLAIN_ANSWER + '"}').strip()
-        check('t10 chunks concatenate to the full text in order', joined == expected,
-              f'got {len(joined)} chars, want {len(expected)}')
+        check('t10 chunks cover the full text in order',
+              ordered_chunks(records, expected) == expected,
+              f'got {len(ordered_chunks(records, expected))} chars, want {len(expected)}')
 
     # endpoint down -> built-in speech fallback, chat still works
     h.set_settings(ttsEndpointUrl='http://127.0.0.1:9999')

@@ -459,8 +459,8 @@ export function mountUi(css: string): void {
         break;
       }
       case 'chat.answer': {
-        attachTts(addAssistantMessage(message.text), message.text);
-        if (autoRead) speakText(message.text);
+        const ttsButton = attachTts(addAssistantMessage(message.text), message.text);
+        if (autoRead) speakText(message.text, ttsButton);
         break;
       }
       case 'agent.step': {
@@ -498,14 +498,15 @@ export function mountUi(css: string): void {
 
   function finalizeAssistant(text: string, stopped: boolean): void {
     if (text) {
+      let ttsButton: HTMLButtonElement;
       if (pendingAssistant) {
         pendingAssistant.bubble.innerHTML = renderMarkdown(text);
-        attachTts(pendingAssistant.bubble, text);
+        ttsButton = attachTts(pendingAssistant.bubble, text);
       } else {
-        attachTts(addAssistantMessage(text), text);
+        ttsButton = attachTts(addAssistantMessage(text), text);
       }
       if (stopped) addNote('(stopped)');
-      else if (autoRead) speakText(text);
+      else if (autoRead) speakText(text, ttsButton);
     } else {
       pendingAssistant?.bubble.remove();
       addNote(stopped ? 'Stopped.' : 'Empty response.');
@@ -804,9 +805,12 @@ export function mountUi(css: string): void {
     return button;
   }
 
-  function attachTts(bubble: HTMLElement, text: string): void {
-    if (bubble.querySelector('.ba-tts')) return;
-    bubble.append(makeTtsButton(text));
+  function attachTts(bubble: HTMLElement, text: string): HTMLButtonElement {
+    const existing = bubble.querySelector('.ba-tts');
+    if (existing instanceof HTMLButtonElement) return existing;
+    const button = makeTtsButton(text);
+    bubble.append(button);
+    return button;
   }
 
   function toggleSpeech(text: string, button: HTMLButtonElement): void {
@@ -832,14 +836,30 @@ export function mountUi(css: string): void {
     });
   }
 
-  function speakText(text: string): void {
+  function speakText(text: string, button?: HTMLButtonElement): void {
     stopSpeech();
     const spoken = stripMarkdownForSpeech(text);
     if (!spoken) return;
+    if (button) {
+      currentTtsButton = button;
+      button.textContent = '…';
+      button.title = 'Loading audio…';
+    }
     const token = ttsToken;
-    void speakWithEndpoint(spoken, null, token).then((played) => {
+    void speakWithEndpoint(spoken, button ?? null, token).then((played) => {
       if (token !== ttsToken || played) return;
-      speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+      if (button) {
+        button.textContent = '⏹';
+        button.title = 'Stop reading';
+      }
+      const utterance = new SpeechSynthesisUtterance(spoken);
+      utterance.onend = () => {
+        if (button) resetTtsButton(button);
+      };
+      utterance.onerror = () => {
+        if (button) resetTtsButton(button);
+      };
+      speechSynthesis.speak(utterance);
     });
   }
 
@@ -857,15 +877,30 @@ export function mountUi(css: string): void {
     if (!settings.ttsEndpointUrl?.trim()) return false;
     const chunks = splitSpeechChunks(spoken);
     const pending: Promise<SpeakResult>[] = [];
+    const fetchStart = performance.now();
     let nextToFetch = 0;
+    let startedPlaying = false;
     const startFetches = (): void => {
-      while (nextToFetch < chunks.length && pending.length <= TTS_PREFETCH) {
+      // The first chunk fires ALONE: servers that queue or batch concurrent
+      // requests would otherwise delay its response (and the first spoken
+      // word) behind the rest of the burst. Once playback has started, keep
+      // TTS_PREFETCH chunks in flight so playback rarely waits.
+      const maxInFlight = startedPlaying ? TTS_PREFETCH + 1 : 1;
+      while (nextToFetch < chunks.length && pending.length < maxInFlight) {
         const index = nextToFetch++;
         const text = chunks[index]!;
         pending.push(
-          rpc<SpeakResult>({ kind: 'voice:speak', text }).catch((error) => {
-            throw new FetchError(index, error);
-          }),
+          rpc<SpeakResult>({ kind: 'voice:speak', text }).then(
+            (result) => {
+              console.info(
+                `[panel] tts: chunk ${index + 1}/${chunks.length} fetched in ${Math.round(performance.now() - fetchStart)}ms`,
+              );
+              return result;
+            },
+            (error) => {
+              throw new FetchError(index, error);
+            },
+          ),
         );
       }
     };
@@ -875,6 +910,8 @@ export function mountUi(css: string): void {
       for (let index = 0; index < chunks.length; index++) {
         const { audioBase64, mimeType } = await pending.shift()!;
         if (token !== ttsToken) return true;
+        if (index === 0) startedPlaying = true;
+        startFetches();
         const blob = new Blob([base64ToBytes(audioBase64)], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
@@ -893,10 +930,13 @@ export function mountUi(css: string): void {
           button.textContent = '⏹';
           button.title = 'Stop reading';
         }
+        console.info(
+          `[panel] tts: playing chunk ${index + 1}/${chunks.length} at ${Math.round(performance.now() - fetchStart)}ms`,
+        );
         await playAudio(audio);
         playedAny = true;
-        startFetches();
       }
+      if (token === ttsToken && button) resetTtsButton(button);
       return true;
     } catch (error) {
       if (token !== ttsToken) return true;

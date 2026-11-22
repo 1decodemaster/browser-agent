@@ -6,7 +6,25 @@
 
 ## Current status
 
-- **Extension version:** 0.15.1 (chunked endpoint TTS). A4 (vision grounding) next.
+- **Extension version:** 0.15.2 (staged TTS prefetch + auto-read stop button). A4 next.
+- **v0.15.2 — TTS pipeline fixes from real uvicorn/Kokoro testing**:
+  - **Speech started only after ALL chunk responses**: the initial prefetch fired 3 concurrent
+    requests; servers that queue/batch concurrent requests (uvicorn workers, GPU locks) respond
+    to the burst as a whole, so chunk 0's audio waited for the batch. Now the **first chunk fires
+    alone**; once its response arrives (playback starting), up to `TTS_PREFETCH` (2) more chunks
+    are kept in flight. If the next chunk is not back when the current one ends, the loop simply
+    waits — a natural end-of-sentence pause — then continues (no skip/restart).
+  - **Auto-read now drives the message's ▶ button**: `speakText` takes the message's TTS button —
+    during auto-play it shows `…` then `⏹` (click = stop, previously it showed ▶ and a click
+    triggered a duplicate read); the button resets on natural completion; the fallback
+    (speechSynthesis) path manages the button too. `attachTts` returns the button.
+  - **Per-chunk diagnostics**: `[panel] tts: chunk N/M fetched in Xms` + `playing chunk N/M at Xms`
+    in the page console (relative to pipeline start) — makes server-side latency visible.
+  - Button reset bug fixed: the chunked pipeline left the button stuck on ⏹ after the last chunk.
+  - E2E: mock speech records carry arrival + response timestamps and support `voice=slow-<sec>`
+    per-request delay; T11 asserts the staged recv pattern (first request alone, no upfront burst,
+    refills tracking pipeline progress) and in-order coverage; T10/T11 concat checks are resilient
+    to the mock's thread-scheduling record order (client playback order is FIFO by design). 70/70.
 - **v0.15.1 — chunked TTS for fast first word**:
   - `speakWithEndpoint` splits the spoken text into sentence-ish chunks
     (`splitSpeechChunks`: split on `[.!?…]` + whitespace, merge to bounds — first chunk ≤160

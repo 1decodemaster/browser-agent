@@ -16,6 +16,10 @@ Behaviors are selected via the model name in the request:
   synth-delay-<seconds> - instant for agent steps, delayed for the answer
                           synthesis call (delivery/fallback probe).
 
+Speech: voice "slow-<seconds>" delays each speech response by <seconds>
+        (pipelining/first-word probes). Records carry received_t (request
+        arrival) and t (response sent).
+
 Debug: GET /debug/requests?model=<name> - recorded request facts;
        GET /debug/reset - clear records.
 """
@@ -56,6 +60,8 @@ PLAIN_ANSWER = (
     'which costs about thirty dollars more per person. Afternoon and evening departures are '
     'also available at a small premium, and the red-eye returns at dawn for the budget minded. '
     'All fares include one carry on bag but charge for checked luggage on the basic economy tier. '
+    'Seat selection and flexible dates add to the total, so book early if you want a window seat. '
+    'The morning flight is usually the most reliable in winter, though fog can delay it by an hour. '
     'Would you like the full itinerary for any of these flights?'
 )
 
@@ -271,11 +277,18 @@ class Handler(BaseHTTPRequestHandler):
     def handle_speech(self):
         length = int(self.headers.get('Content-Length', 0))
         payload = json.loads(self.rfile.read(length) or b'{}')
+        voice = payload.get('voice') or ''
+        slow = re.fullmatch(r'slow-(\d+(?:\.\d+)?)', voice)
+        received_t = time.time()
+        if slow:
+            time.sleep(float(slow.group(1)))
         RECORDS.setdefault('tts', []).append({
             'model': payload.get('model'),
-            'voice': payload.get('voice'),
+            'voice': voice,
             'input': (payload.get('input') or '')[:500],
             'response_format': payload.get('response_format'),
+            'received_t': round(received_t, 3),
+            't': round(time.time(), 3),
         })
         del RECORDS['tts'][:-60]
         wav = tiny_wav()
