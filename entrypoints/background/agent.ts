@@ -12,7 +12,7 @@ import type {
   ObserveResult,
   ScrollTarget,
 } from '@/shared/protocol';
-import type { ChatPortMessage } from '@/shared/types';
+import type { ChatPortMessage, Settings } from '@/shared/types';
 import { getTabPort } from './chat';
 
 const agentKey = (tabId: number) => `session:agent:${tabId}` as const;
@@ -329,24 +329,50 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
     if (error) notify(tabId, { type: 'agent.error', message: error });
     else notify(tabId, { type: 'agent.done', summary });
     if (!run.stop && state.narration.length > 0) {
-      void deliverAnswer(tabId, state);
+      void deliverAnswer(tabId, state, summary);
     }
   }
 }
 
 /** Runs after the run slot is released so a new goal can start immediately. */
-async function deliverAnswer(tabId: number, state: AgentState): Promise<void> {
+async function deliverAnswer(
+  tabId: number,
+  state: AgentState,
+  fallbackSummary?: string,
+): Promise<void> {
   acquireKeepalive();
   try {
-    const answer = await synthesizeAnswer(state);
+    let answer = '';
+    try {
+      console.info('[agent] answer synthesis: started');
+      answer = await synthesizeAnswer(state);
+      console.info(`[agent] answer synthesis: done (${answer.length} chars)`);
+    } catch (synthError) {
+      console.warn(
+        '[agent] answer synthesis failed:',
+        synthError instanceof Error ? synthError.message : synthError,
+      );
+    }
+    if (!answer.trim() && fallbackSummary) {
+      answer = fallbackSummary;
+      console.info('[agent] answer synthesis: using the run summary as fallback');
+    }
     if (answer.trim()) {
       const history = await getHistory(tabId);
       history.push({ role: 'assistant', text: answer });
       await saveHistory(tabId, history);
-      notify(tabId, { type: 'chat.answer', text: answer });
+      console.info('[agent] answer saved to chat history');
+      try {
+        notify(tabId, { type: 'chat.answer', text: answer });
+      } catch (notifyError) {
+        console.warn(
+          '[agent] answer notify failed (panel port closed; it is in chat history):',
+          notifyError instanceof Error ? notifyError.message : notifyError,
+        );
+      }
     }
-  } catch (synthError) {
-    console.info('[agent] answer synthesis failed:', synthError);
+  } catch (unexpectedError) {
+    console.warn('[agent] answer delivery failed:', unexpectedError);
   } finally {
     releaseKeepalive();
   }
@@ -359,11 +385,29 @@ function trimNarration(state: AgentState): void {
   }
 }
 
+function effortExtraBody(
+  settings: Settings,
+  nextEffort?: AgentEffort,
+): Record<string, unknown> | undefined {
+  const memoryEnabled = settings.agentWorkingMemory === true;
+  const configuredEffort = settings.actReasoningEffort?.trim();
+  if (memoryEnabled && nextEffort && nextEffort !== 'default') {
+    return nextEffort === 'off'
+      ? { chat_template_kwargs: { enable_thinking: false } }
+      : { reasoning_effort: nextEffort };
+  }
+  return configuredEffort ? { reasoning_effort: configuredEffort } : undefined;
+}
+
 async function synthesizeAnswer(state: AgentState): Promise<string> {
   const settings = await getSettings();
   if (!settings.endpointUrl) return '';
   const base = normalizeEndpoint(settings.endpointUrl);
   const transcript = state.narration.join('\n');
+  const trimmedTranscript =
+    transcript.length > 6000
+      ? `${transcript.slice(0, 1200)}\n…(middle of the transcript omitted)…\n${transcript.slice(-4500)}`
+      : transcript;
   const memory = state.memory ? `\n\nAgent working notes:\n${state.memory}` : '';
   const messages: ApiMessage[] = [
     {
@@ -371,7 +415,10 @@ async function synthesizeAnswer(state: AgentState): Promise<string> {
       content:
         'You are Browser Agent. An autonomous agent run just tried to accomplish the user goal on web pages. Write the final response to the user: answer the original question from the transcript if the information was found (mention which page it came from), otherwise summarize what was accomplished and what blocked progress. Be concise.',
     },
-    { role: 'user', content: `Goal: ${state.goal}\n\nAgent transcript:\n${transcript}${memory}` },
+    {
+      role: 'user',
+      content: `Goal: ${state.goal}\n\nAgent transcript:\n${trimmedTranscript}${memory}`,
+    },
   ];
   return streamChat({
     base,
@@ -380,6 +427,7 @@ async function synthesizeAnswer(state: AgentState): Promise<string> {
     messages,
     firstTokenTimeoutMs: settings.llmFirstTokenTimeoutMs,
     totalTimeoutMs: settings.llmTotalTimeoutMs,
+    extraBody: effortExtraBody(settings, state.nextEffort),
   });
 }
 
@@ -474,16 +522,7 @@ async function completeOnce(
     { role: 'user', content: userContent },
   ];
 
-  const configuredEffort = settings.actReasoningEffort?.trim();
-  let extraBody: Record<string, unknown> | undefined;
-  if (memoryEnabled && state.nextEffort && state.nextEffort !== 'default') {
-    extraBody =
-      state.nextEffort === 'off'
-        ? { chat_template_kwargs: { enable_thinking: false } }
-        : { reasoning_effort: state.nextEffort };
-  } else if (configuredEffort) {
-    extraBody = { reasoning_effort: configuredEffort };
-  }
+  const extraBody = effortExtraBody(settings, state.nextEffort);
 
   try {
     return await streamChat({

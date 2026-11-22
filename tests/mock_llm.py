@@ -13,6 +13,8 @@ Behaviors are selected via the model name in the request:
                           and `effort` fields and echoes what it RECEIVED
                           (memory marker + reasoning_effort / thinking flag)
                           in `thought`, making the loop observable in narration.
+  synth-delay-<seconds> - instant for agent steps, delayed for the answer
+                          synthesis call (delivery/fallback probe).
 
 Debug: GET /debug/requests?model=<name> - recorded request facts;
        GET /debug/reset - clear records.
@@ -216,10 +218,14 @@ class Handler(BaseHTTPRequestHandler):
 
         delay_first = re.fullmatch(r'delay-first-(\d+)', model)
         dribble = re.fullmatch(r'dribble-(\d+)', model)
+        synth_delay = re.fullmatch(r'synth-delay-(\d+)', model)
 
         try:
             if delay_first:
                 time.sleep(int(delay_first.group(1)))
+                emit(reply)
+            elif synth_delay and not is_agent_step(prompt):
+                time.sleep(int(synth_delay.group(1)))
                 emit(reply)
             elif dribble:
                 total = int(dribble.group(1))

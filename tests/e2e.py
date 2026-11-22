@@ -260,6 +260,7 @@ def run_tests():
             t5_batch_stop_on_navigation(h)
             t6_working_memory(h)
             t7_memory_flag_off(h)
+            t8_answer_fallback(h)
         finally:
             h.context.close()
 
@@ -393,7 +394,28 @@ def t3_full_agent_run(h):
     check('t3 results shown on page', '8 flights found' in results, repr(results))
     check('t3 summary mentions flights', 'flights' in (state.get('narration')[-1] or '').lower(),
           state.get('narration', ['-'])[-1])
+    answer = wait_chat_answer(h, timeout=20)
+    check('t3 synthesized answer landed in chat history', answer is not None,
+          'no assistant answer after the run')
     h.disable_act()
+
+
+def wait_chat_answer(h, timeout=20, contains=None):
+    """Poll the tab's chat history for the last assistant message (the
+    synthesized answer). Returns it, or None on timeout."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        history = h.sw.evaluate(
+            "async (tabId) => (await chrome.storage.session.get('chat:' + tabId))['chat:' + tabId]",
+            h.tab_id,
+        ) or []
+        assistants = [m['text'] for m in history if m.get('role') == 'assistant']
+        last = assistants[-1] if assistants else None
+        if last and (contains is None or contains in last):
+            return last
+        time.sleep(0.4)
+    return last
 
 
 def t5_batch_stop_on_navigation(h):
@@ -494,6 +516,30 @@ def t7_memory_flag_off(h):
     check('t7 no reasoning_effort sent', all(record['reasoning_effort'] is None for record in steps))
     check('t7 no thinking overrides sent',
           all(record['enable_thinking'] is None for record in steps))
+
+
+def t8_answer_fallback(h):
+    print('\nT8: answer delivery fallback when synthesis is too slow')
+    goal = 'Search for flights from DEL to SFO for Dec 24'
+    h.set_settings(model='synth-delay-8', actReasoningEffort='',
+                   llmFirstTokenTimeoutMs=3000, agentWorkingMemory=False)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=90)
+    narration = '\n'.join(state.get('narration', []))
+    check('t8 run finished without error', 'Error' not in narration, narration[-300:])
+    answer = wait_chat_answer(h, timeout=30, contains='Flight search completed')
+    check('t8 fallback summary delivered to chat after synthesis timeout',
+          answer is not None, f'last assistant message: {answer!r}')
+    # restore
+    h.set_settings(model='scripted', llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.disable_act()
 
 
 def t4_timeouts(h):
