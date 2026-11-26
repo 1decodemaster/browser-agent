@@ -6,7 +6,30 @@
 
 ## Current status
 
-- **Extension version:** 0.16.0 (**R1 — correctness + id stability done**; **R2 next**).
+- **Extension version:** 0.17.0 (**R1 + R2 done**; **R3 next**).
+- **v0.17.0 — R2 perception fidelity (state + names + budget)**:
+  - **Live state on index lines**: `= "value"` (input/textarea value, select's selected option),
+    capped `opts:` list for selects (>1 option; 12 shown, 120 chars), `[checked]`, `[disabled]`,
+    `[expanded]` (aria-expanded) — computed from the live DOM at observe time
+    (`indexer.ts` `elementState`). The system prompt explains the notation; `extract` on a field
+    reports its value / checked state / selected option instead of element text (`act.ts`
+    `fieldReport`).
+  - **Name order** now aria-label → alt → placeholder → label[for] → wrapping label (minus the
+    control's own text) → title → aria-labelledby → innerText. Value-as-name dropped (identity ≠
+    state — the value rides on the line as `= "..."` instead).
+  - **Contextual naming** for still-unnamed controls: nearest row/cell-ish container text
+    (≤200 chars), position-prefixed by the short text neighbour right before the control when it
+    adds position ("$150 (Economy window seat ...)").
+  - **cursor:pointer counts only where it starts**: an element whose pointer is inherited from an
+    ancestor that already shows it is no longer indexed as its own widget — clickable rows stop
+    eating the interactive budget one child each (cached getComputedStyle ancestor walk).
+  - **Serialization**: fresh → in-viewport → DOM order; budgets 150 interactive / 320 total
+    (fresh pinned outside the budget as before); trailer now says scroll / extract-with-no-target
+    (`find` wording lands with R3's find op).
+  - Fixture: prefs section (label[for]+value field, select, wrapping-label checkbox, disabled
+    input, unnamed checkboxes in list rows, pointer row) + fixed in-viewport FAB for the
+    ordering check. **T14** 13 checks (state lines, naming, pointer-start, viewport order,
+    extract-on-field). Suite 96/96.
 - **v0.16.0 — R1 correctness + id stability** (from the ADR-0007 reference):
   - **`key` op un-dead**: prompt advertised it and `runAction` implemented it, but `KNOWN_OPS`
     omitted it → `coerceAction` silently dropped every key action (the ADR's "ops live in three
@@ -385,7 +408,8 @@
   - Post-action settle before re-observe: 800 ms after a navigating op, 400 ms otherwise (today only
     *empty* indexes are retried, so half-rendered pages pass the ≥20-char gate). `navigating` flag
     propagates on ActionObservation from executeActions.
-- [ ] **R2 — Perception fidelity (state + names + budget)**
+- [x] **R2 — Perception fidelity (state + names + budget)** (v0.17.0 — done as described, except
+  the trailer keeps scroll/extract wording until `find` exists in R3)
   - Live state on index lines: `= "value"`, `[checked]`, `[disabled]`, `[expanded]`, combobox selected
     option + capped option list. The system prompt already says "check whether the index already shows
     the desired state" — but the index shows no state (ADR 0.3.0: the model cannot act on a dependent

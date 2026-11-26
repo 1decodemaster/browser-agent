@@ -282,7 +282,7 @@ async function runAction(
         }
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
-        const text = elementText(resolved.element);
+        const text = fieldReport(resolved.element) ?? elementText(resolved.element);
         sp.highlight(resolved.element.getBoundingClientRect(), 'success');
         window.setTimeout(() => {
           if (active && pinned?.element === resolved.element) {
@@ -429,6 +429,31 @@ function nearbyChipText(
       if (!text || text.length > 120) continue;
       if (text.toLowerCase().includes(needle)) return text.slice(0, 80);
     }
+  }
+  return null;
+}
+
+// extract on a form field reports its live value / checked state instead of text content.
+function fieldReport(element: HTMLElement): string | null {
+  if (element instanceof HTMLInputElement) {
+    if (element.type === 'checkbox' || element.type === 'radio') {
+      return `${element.type} is ${element.checked ? 'checked' : 'unchecked'}`;
+    }
+    return element.value.trim()
+      ? `value = "${element.value.trim().slice(0, 200)}"`
+      : 'value is empty';
+  }
+  if (element instanceof HTMLTextAreaElement) {
+    return element.value.trim()
+      ? `value = "${element.value.trim().slice(0, 200)}"`
+      : 'value is empty';
+  }
+  if (element instanceof HTMLSelectElement) {
+    const selected = element.options[element.selectedIndex]?.text.trim() ?? '';
+    const options = Array.from(element.options, (option) => option.text.trim())
+      .filter((text) => text)
+      .slice(0, 12);
+    return `selected "${selected}" (options: ${options.join(', ')})`;
   }
   return null;
 }

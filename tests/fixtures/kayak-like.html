@@ -15,6 +15,10 @@
   #portal-suggestions [role="option"] { padding: 8px 12px; cursor: pointer; }
   #portal-suggestions [role="option"]:hover { background: #eef4ff; }
   .filler li { margin: 2px 0; }
+  #prefs .pref-row { margin: 6px 0; }
+  #upgrade-row { cursor: pointer; padding: 6px; border: 1px solid #ccc; border-radius: 6px; max-width: 320px; list-style: none; }
+  #upgrade-row span { margin-right: 8px; }
+  #help-fab { position: fixed; left: 8px; bottom: 8px; width: 34px; height: 34px; border-radius: 50%; }
 </style>
 </head>
 <body>
@@ -36,12 +40,41 @@
     <button type="button" id="dates">Dec 24 - Jan 27</button>
     <button type="button" id="search">Search flights</button>
   </form>
+  <h2>Flight preferences</h2>
+  <section id="prefs">
+    <div class="pref-row">
+      <label for="dep-time">Departure time</label>
+      <input id="dep-time" type="text" value="morning">
+    </div>
+    <div class="pref-row">
+      <label for="cabin">Cabin class</label>
+      <select id="cabin">
+        <option>Economy</option>
+        <option>Premium Economy</option>
+        <option>Business</option>
+        <option>First</option>
+      </select>
+    </div>
+    <div class="pref-row">
+      <label>Nonstop only <input type="checkbox" checked></label>
+    </div>
+    <div class="pref-row">
+      <label for="promo">Promo code</label>
+      <input id="promo" type="text" value="SUMMER20" disabled>
+    </div>
+    <ul id="extras">
+      <li><span>Window seat</span> <input type="checkbox"></li>
+      <li><span>Extra legroom</span> <input type="checkbox" disabled></li>
+      <li id="upgrade-row"><span>Seat upgrade offer</span><span>$25</span></li>
+    </ul>
+  </section>
   <section id="results" hidden></section>
   <h2>Today's flight deals</h2>
   <ul id="deals" class="filler"></ul>
   <h2>Popular destinations</h2>
   <ul id="filler2" class="filler"></ul>
 </main>
+<button type="button" id="help-fab" aria-label="Help floating">?</button>
 <script>
 'use strict';
 const AIRPORTS = {
@@ -143,9 +176,9 @@ document.getElementById('search').addEventListener('click', () => {
 });
 
 // Budget-exhausting filler: 130 interactive elements + ~300 content elements,
-// so static entries alone exceed the 280-entry serialization budget
-// (120 interactive + 160 content) and anything appended later in DOM order
-// (the suggestion portal) is truncated away unless the indexer pins it.
+// so static entries alone exceed the 320-entry serialization budget
+// (150 interactive + content filling the rest) and anything appended later in
+// DOM order (the suggestion portal) is truncated away unless the indexer pins it.
 (function fill() {
   const deals = document.getElementById('deals');
   for (let i = 1; i <= 130; i++) {

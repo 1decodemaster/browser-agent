@@ -1,6 +1,6 @@
 # Agent loop — how a run works
 
-> Reference for `v0.16.x`. Generated from the fix-branch code; line numbers drift, function
+> Reference for `v0.17.x`. Generated from the fix-branch code; line numbers drift, function
 > names are stable. The loop lives in `entrypoints/background/agent.ts`; the page side in
 > `entrypoints/content/act/`.
 
@@ -13,7 +13,7 @@ You (panel)                 Background SW (agent.ts)              Page (content 
     │                              │   │ 1. OBSERVE                    │
     │                              │   ├──act:observe (RPC)────────────►│ observePage
     │                              │   │  ▲ index string                │   buildElementTable (fresh diff)
-    │                              │   │                                │   serializeTable (280 cap,
+    │                              │   │                                │   serializeTable (320 cap,
     │                              │   │ 2. THINK                       │    "Recently appeared" pinned)
     │                              ├──completeOnce                      │
     │                              │   │  agentSystem (prompt)          │
@@ -49,8 +49,10 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    against the last *observed* table (new/visibility-toggled elements, sticky while present);
    element **ids persist across observations** while an element lives (module-level WeakMap +
    counter), so ids referenced in earlier narration keep pointing at the same node —
-   and serializes under the 280-entry budget with fresh interactive entries pinned at the top
-   under a "Recently appeared" header (`serializeTable`).
+   and serializes under the 320-entry budget (150 interactive; fresh first, then in-viewport,
+   then DOM order) with fresh interactive entries pinned at the top under a "Recently appeared"
+   header. Lines carry live state: `= "value"` / selected option + `opts:` for selects,
+   `[checked]`, `[disabled]`, `[expanded]` (`serializeTable`).
 
 3. **Think** — `completeOnce` assembles: system prompt (`agentSystem`: base rules; v2 schema +
    memory/effort rules only when `agentWorkingMemory` is on), goal, step N of 12, page title/URL,

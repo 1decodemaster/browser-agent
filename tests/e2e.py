@@ -292,6 +292,7 @@ def run_tests():
             t11_tts_pipeline(h)
             t12_key_op_and_persistent_ids(h)
             t13_destructive_submit_gate(h)
+            t14_perception_fidelity(h)
         finally:
             h.context.close()
 
@@ -307,7 +308,7 @@ def t0_wiring(h):
     index = h.observe()
     check('t0 observe returns index', len(index['index']) > 1000)
     check('t0 budget-exhausting page', 'more elements not shown' in index['index'],
-          'expected truncation note (page must exceed the 280 budget)')
+          'expected truncation note (page must exceed the 320 budget)')
 
 
 def t1_chat_smoke(h):
@@ -854,6 +855,82 @@ def t13_destructive_submit_gate(h):
     check('t13 confirmation lets the batch through', 'San Francisco (SFO)' in chip2, repr(chip2))
     check('t13 confirm marker cleared',
           h.page.evaluate("sessionStorage.getItem('__ba_confirm')") is None)
+
+
+def t14_perception_fidelity(h):
+    print('\nT14: R2 perception fidelity - live state, names, pointer-start, viewport order')
+    h.set_settings(model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    index = h.observe()['index']
+
+    def line_of(needle):
+        for line in index.splitlines():
+            if needle in line and line.startswith('['):
+                return line
+        return ''
+
+    check('t14 label[for] name + live value state',
+          'textbox "Departure time" = "morning"' in line_of('"Departure time"'),
+          line_of('"Departure time"'))
+    cabin = line_of('"Cabin class"')
+    check('t14 select shows selected option + capped option list',
+          'combobox "Cabin class" = "Economy"' in cabin and 'opts:' in cabin
+          and 'Premium Economy' in cabin and 'First' in cabin, cabin)
+    check('t14 wrapping label names the checkbox + [checked] flag',
+          'checkbox "Nonstop only" [checked]' in line_of('"Nonstop only"'),
+          line_of('"Nonstop only"'))
+    check('t14 disabled field flagged',
+          'textbox "Promo code" = "SUMMER20" [disabled]' in line_of('"Promo code"'),
+          line_of('"Promo code"'))
+    check('t14 unnamed checkbox borrows its row text (contextual name)',
+          'checkbox "Window seat"' in index)
+    check('t14 contextual name + disabled flag together',
+          'checkbox "Extra legroom" [disabled]' in line_of('"Extra legroom"'),
+          line_of('"Extra legroom"'))
+
+    upgrade_lines = [l for l in index.splitlines()
+                     if 'Seat upgrade offer' in l and l.startswith('[')]
+    check('t14 pointer row indexed once (pointer starts at the row)',
+          len(upgrade_lines) == 1, str(upgrade_lines))
+    child_lines = [l for l in index.splitlines() if re.search(r'\] \w+ "\$25"', l)]
+    check('t14 pointer-inherited child not indexed', not child_lines, str(child_lines))
+
+    lines = index.splitlines()
+    fab = next((i for i, l in enumerate(lines) if 'Help floating' in l), None)
+    deal60 = next((i for i, l in enumerate(lines) if 'Deal to City 60' in l), None)
+    check('t14 in-viewport interactive listed before offscreen ones',
+          fab is not None and deal60 is not None and fab < deal60,
+          f'fab={fab} deal60={deal60}')
+
+    # live state follows the widget: typed value + aria-expanded on the index line
+    h.page.fill('#origin-group input', 'DEL')
+    time.sleep(0.4)
+    after = h.observe()['index']
+    origin_line = next((l for l in after.splitlines() if 'combobox "Origin"' in l), '')
+    check('t14 typed value + [expanded] on the live line',
+          '= "DEL"' in origin_line and '[expanded]' in origin_line, origin_line)
+    h.page.evaluate("document.querySelector('#origin-group input')?.blur()")
+    time.sleep(0.4)
+
+    # extract on fields reports value / checked / selected
+    dep_id = id_of(index, '"Departure time"')
+    nonstop_id = id_of(index, '"Nonstop only"')
+    cabin_id = id_of(index, '"Cabin class"')
+    obs = h.rpc({'kind': 'act:execute', 'actions': [
+        {'op': 'extract', 'target': dep_id},
+        {'op': 'extract', 'target': nonstop_id},
+        {'op': 'extract', 'target': cabin_id},
+    ], 'confirmMode': 'never'})
+    check('t14 extract reports field value',
+          'value = "morning"' in (obs[0].get('message') or ''), str(obs[0]))
+    check('t14 extract reports checkbox state',
+          'is checked' in (obs[1].get('message') or ''), str(obs[1]))
+    check('t14 extract reports selected option',
+          'selected "Economy"' in (obs[2].get('message') or ''), str(obs[2]))
 
 
 if __name__ == '__main__':
