@@ -1,8 +1,9 @@
 import { rpc } from '@/shared/rpc';
 import { getSettings } from '@/shared/settings';
 import { normalizeEndpoint } from '@/shared/endpoint';
-import { streamChat, isLlmTimeout, type ApiMessage } from './llm';
+import { streamChat, isLlmTimeout, type ApiContentPart, type ApiMessage } from './llm';
 import { acquireKeepalive, releaseKeepalive } from './keepalive';
+import { capturePageScreenshot } from './screenshot';
 import { getHistory, saveHistory } from './chat';
 import type {
   ActionObservation,
@@ -33,6 +34,7 @@ interface AgentState {
   maxSteps?: number;
   pausedReason?: 'blocked' | 'steplimit';
   pauseQuestion?: string;
+  pendingScreenshot?: string;
 }
 
 type AgentEffort = 'low' | 'medium' | 'high' | 'off' | 'default';
@@ -65,9 +67,15 @@ const MEMORY_RULES = [
   'effort: the reasoning effort for your NEXT step. "low" for single mechanical actions you are sure about (click a visible button, fill one field), "medium" for a normal step, "high" only when the page contradicted your plan and you need to rethink, "off" only for a single trivial action you are fully confident about, "default" to keep the configured effort.',
 ].join(' ');
 
-function agentSystem(memoryEnabled: boolean, extraInstructions: string): string {
+function agentSystem(memoryEnabled: boolean, extraInstructions: string, visionEnabled: boolean): string {
   const lines = [...AGENT_SYSTEM_LINES];
   lines[2] = memoryEnabled ? SCHEMA_V2 : SCHEMA_V1;
+  if (visionEnabled) {
+    lines[3] += ' | {"op":"look"} (see Vision below)';
+    lines.push(
+      'Vision: {"op":"look"} captures the visible page as a screenshot and attaches it to your NEXT step (the ops list also carries it). Use it only as a last resort - when layout/visual detail matters and the index + extract/find/inspect cannot convey it (canvas, image-only content, visual confirmation after a click). The screenshot costs a lot of tokens: never look twice in a row while an unread screenshot is already attached.',
+    );
+  }
   if (memoryEnabled) {
     lines.push(MEMORY_RULES);
   }
@@ -209,7 +217,9 @@ function notify(tabId: number, message: ChatPortMessage): void {
 async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   const state = await loadState(tabId);
   if (!state) return;
-  const memoryEnabled = (await getSettings()).agentWorkingMemory === true;
+  const loopSettings = await getSettings();
+  const memoryEnabled = loopSettings.agentWorkingMemory === true;
+  const visionEnabled = loopSettings.actVision === true;
   acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
@@ -298,6 +308,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           : `Model did not return valid actions: ${lastError}`;
         break;
       }
+      state.pendingScreenshot = undefined;
       console.info(`[agent] tab=${tabId} ops=${JSON.stringify(parsed.actions.map((a) => a.op))}`);
       if (memoryEnabled) {
         if (typeof parsed.memory === 'string') {
@@ -324,7 +335,9 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       const doneAction = parsed.actions.find(
         (action): action is { op: 'done'; summary?: string } => action.op === 'done',
       );
-      const executable = parsed.actions.filter((action) => action.op !== 'done');
+      const nonDone = parsed.actions.filter((action) => action.op !== 'done');
+      const wantsLook = nonDone.some((action) => action.op === 'look');
+      const executable = nonDone.filter((action) => action.op !== 'look');
       const overflow = executable.length > MAX_OPS_PER_STEP ? executable.splice(MAX_OPS_PER_STEP) : [];
       const observations = executable.length
         ? await executeOnContent(tabId, executable, confirmMode(state.askFirst), run)
@@ -335,6 +348,26 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           op: 'batch',
           message: `dropped ${overflow.length} action(s) beyond the ${MAX_OPS_PER_STEP}-per-step cap (${overflow.map((action) => action.op).join(', ')}) - keep navigation/submission last`,
         });
+      }
+      if (wantsLook) {
+        if (!visionEnabled) {
+          observations.push({
+            ok: false,
+            op: 'look',
+            message: 'vision is off - enable "Act model can see screenshots" in Options, or rely on extract/find/inspect',
+          });
+        } else {
+          try {
+            state.pendingScreenshot = await capturePageScreenshot(tabId);
+            observations.push({ ok: true, op: 'look', message: 'screenshot captured - attached to your next step' });
+          } catch (captureError) {
+            observations.push({
+              ok: false,
+              op: 'look',
+              message: `screenshot failed: ${captureError instanceof Error ? captureError.message : String(captureError)}`,
+            });
+          }
+        }
       }
       console.info(`[agent] tab=${tabId} executed=${observations.length}`);
 
@@ -366,7 +399,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         pauseQuestion = parsed.summary?.trim() || parsed.thought.trim() || 'I cannot proceed without input from you.';
         break;
       }
-      if (!executable.length) {
+      if (!nonDone.length) {
         idleStreak++;
         if (idleStreak > IDLE_STEP_TOLERANCE) {
           error = `Model returned no actions ${idleStreak} steps in a row - run aborted.`;
@@ -582,6 +615,23 @@ async function executeOnContent(
   }
 }
 
+function userContentWithImage(
+  text: string,
+  state: AgentState,
+  settings: Settings,
+): string | ApiContentPart[] {
+  const screenshot =
+    settings.actVision === true && state.pendingScreenshot ? state.pendingScreenshot : undefined;
+  if (!screenshot) return text;
+  return [
+    {
+      type: 'text',
+      text: `${text}\n\n[The screenshot of the page you captured with look is attached to this message - read it for layout and visual detail.]`,
+    },
+    { type: 'image_url', image_url: { url: screenshot } },
+  ];
+}
+
 async function completeOnce(
   tabId: number,
   state: AgentState,
@@ -597,7 +647,8 @@ async function completeOnce(
   const memoryEnabled = settings.agentWorkingMemory === true;
 
   const base = normalizeEndpoint(endpoint);
-  const system = agentSystem(memoryEnabled, settings.actExtraInstructions?.trim() ?? '');
+  const visionEnabled = settings.actVision === true;
+  const system = agentSystem(memoryEnabled, settings.actExtraInstructions?.trim() ?? '', visionEnabled);
 
   const memorySection =
     memoryEnabled && state.memory
@@ -635,7 +686,7 @@ async function completeOnce(
 
   const messages: ApiMessage[] = [
     { role: 'system', content: system },
-    { role: 'user', content: userContent },
+    { role: 'user', content: userContentWithImage(userContent, state, settings) },
   ];
 
   const extraBody = effortExtraBody(settings, state.nextEffort);
@@ -709,6 +760,7 @@ const KNOWN_OPS = new Set([
   'extract',
   'navigate',
   'wait',
+  'look',
   'done',
 ]);
 
@@ -753,6 +805,8 @@ function coerceAction(candidate: unknown): ActionOp | null {
       return typeof record.url === 'string' ? { op: 'navigate', url: record.url } : null;
     case 'wait':
       return typeof record.ms === 'number' ? { op: 'wait', ms: record.ms } : null;
+    case 'look':
+      return { op: 'look' };
     case 'done':
       return { op: 'done', summary: typeof record.summary === 'string' ? record.summary : undefined };
     default:

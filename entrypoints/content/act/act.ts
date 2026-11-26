@@ -407,6 +407,13 @@ async function runAction(
       case 'done': {
         return { ...base, ok: true, message: action.summary };
       }
+      case 'look': {
+        return {
+          ...base,
+          ok: false,
+          message: 'look is handled by the agent loop (it captures the tab), not by the page',
+        };
+      }
       default: {
         const unreachable: never = action;
         void unreachable;

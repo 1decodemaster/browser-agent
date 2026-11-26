@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 import { onRpc, type RpcSender } from '@/shared/rpc';
 import { clearHistory, getHistory, watchChatPorts } from './chat';
 import { getAgentSummary, toggleAgentDebug } from './agent';
+import { capturePageScreenshot } from './screenshot';
 import { transcribeAudio, synthesizeSpeech } from './voice';
 
 export default defineBackground(() => {
@@ -15,7 +16,7 @@ export default defineBackground(() => {
         await clearHistory(requireTab(sender));
         return true;
       case 'screenshot:capture':
-        return { dataUrl: await captureScreenshot(requireTab(sender)) };
+        return { dataUrl: await capturePageScreenshot(requireTab(sender)) };
       case 'voice:transcribe':
         return transcribeAudio(request);
       case 'voice:speak':
@@ -46,23 +47,6 @@ function requireTab(sender: RpcSender): number {
   const tabId = sender.tab?.id;
   if (tabId == null) throw new Error('Request did not come from a tab');
   return tabId;
-}
-
-interface CaptureOptions {
-  format: 'jpeg';
-  quality: number;
-}
-
-async function captureScreenshot(tabId: number): Promise<string> {
-  const tab = await browser.tabs.get(tabId);
-  const options: CaptureOptions = { format: 'jpeg', quality: 70 };
-  const firefoxTabs = browser.tabs as unknown as {
-    captureTab?: (tabId: number, options: CaptureOptions) => Promise<string>;
-  };
-  if (typeof firefoxTabs.captureTab === 'function') {
-    return firefoxTabs.captureTab(tabId, options);
-  }
-  return browser.tabs.captureVisibleTab(tab.windowId, options);
 }
 
 async function togglePanelOnActiveTab(): Promise<void> {

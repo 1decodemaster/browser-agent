@@ -28,6 +28,8 @@ Behaviors are selected via the model name in the request:
   r4slow              - never finishes (wait ops) - step-cap pause probe.
   r4done              - finishes immediately via plan status done.
   r4cap               - 11 ops in one step (per-step cap probe), then done.
+  r5look              - R5 vision: returns the look op; finishes with status
+                        done once an image is attached to the prompt.
 
 Speech: voice "slow-<seconds>" delays each speech response by <seconds>
         (pipelining/first-word probes). Records carry received_t (request
@@ -184,6 +186,19 @@ def last_user_content(messages):
     return content
 
 
+def last_user_has_image(messages):
+    for message in reversed(messages):
+        if message.get('role') == 'user':
+            content = message.get('content', '')
+            if isinstance(content, list):
+                return any(
+                    isinstance(part, dict) and part.get('type') == 'image_url'
+                    for part in content
+                )
+            return False
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
@@ -236,6 +251,7 @@ class Handler(BaseHTTPRequestHandler):
             'enable_thinking': (payload.get('chat_template_kwargs') or {}).get('enable_thinking'),
             'has_memory_section': 'Working notes' in prompt,
             'has_conversation': 'Conversation with the user' in prompt,
+            'has_image': last_user_has_image(payload.get('messages', [])),
             'memory_head': received_memory(prompt)[:12],
             'kind': kind,
         })
@@ -408,6 +424,18 @@ class Handler(BaseHTTPRequestHandler):
                 return json.dumps({
                     'v': 1, 'thought': 'too many ops in one step', 'status': 'continue',
                     'actions': actions,
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r5look':
+            if is_agent_step(prompt):
+                if last_user_has_image(payload.get('messages', [])):
+                    return json.dumps({
+                        'v': 1, 'thought': 'saw the screenshot, done', 'status': 'done',
+                        'summary': 'R5LOOK COMPLETE', 'actions': [],
+                    }), 'json'
+                return json.dumps({
+                    'v': 1, 'thought': 'the index is not enough - take a look',
+                    'status': 'continue', 'actions': [{'op': 'look'}],
                 }), 'json'
             return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
         if is_agent_step(prompt):

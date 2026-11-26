@@ -1,6 +1,6 @@
 # Agent loop — how a run works
 
-> Reference for `v0.19.x`. Generated from the fix-branch code; line numbers drift, function
+> Reference for `v0.20.x`. Generated from the fix-branch code; line numbers drift, function
 > names are stable. The loop lives in `entrypoints/background/agent.ts`; the page side in
 > `entrypoints/content/act/`.
 
@@ -24,12 +24,14 @@ You (panel)                 Background SW (agent.ts)              Page (content 
     │                              │   │  parseActionResponse ──► {thought, memory?, effort?, actions}
     │                              │   │  coerceAction ──► validated ops
     │                              │   │ 3. ACT                        │
-     │                              ├──act:execute (RPC)────────────────►│ executeActions
+      │                              ├──act:execute (RPC)────────────────►│ executeActions
       │                              │   │  ▲ observations[]              │   runAction → click/type/key/
       │                              │   │                                │   select/find/inspect/focus/
-      │                              │   │                                │   extract/navigate/wait; confirm
-      │                              │   │                                │   gate; submitForm (Enter-first);
-      │                              │   │                                │   batch stops on nav
+       │                              │   │                                │   extract/navigate/wait/look;
+        │                              │   │                                │   confirm gate; submitForm
+        │                              │   │                                │   (Enter-first); look is
+        │                              │   │                                │   captured loop-side (R5);
+       │                              │   │                                │   batch stops on nav
     │                              │   │ 4. NARRATE + PUSH              │
     │  ◄── agent.step (port) ───────┤ notify (tabPorts)                  │
     │                              │   repeat: done/stop end,            │
@@ -98,7 +100,14 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    before/after text, ancestor context, and the controls sharing the container; `focus` focuses
     a field. Read-only ops never ask for confirmation. ≤8 ops run per step (R4): the prompt
     makes the model keep navigation/submission/menu-open last, and the loop splices off any
-    overflow with a `batch → failed — dropped N action(s)…` observation.
+    overflow with a `batch → failed — dropped N action(s)…` observation. **`look` (R5)** is a
+    loop-level op, never forwarded to the page (the page side reports it loop-handled): with
+    `Settings.actVision` on (Options → Act mode), the loop captures the tab
+    (`background/screenshot.ts`: Chrome `captureVisibleTab` / Firefox `captureTab`) and stores
+    the JPEG as `state.pendingScreenshot`; the *next* `completeOnce` attaches it as an
+    `image_url` part with a marker line and consumes it (one shot per look). Vision off →
+    `look → failed` pointing at the Options switch; the prompt only advertises the op when the
+    gate is on (it costs tokens).
 
 6. **Narrate + push** — observations are formatted into the narration (trimmed to 40 lines /
    16k chars), pushed over the panel port via `notify` (`agent.step`). A missing port is logged

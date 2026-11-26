@@ -18,6 +18,7 @@ const ttsAutoReadInput = document.getElementById('ttsAutoRead') as HTMLInputElem
 const firstTokenTimeoutInput = document.getElementById('llmFirstTokenTimeoutMs') as HTMLInputElement;
 const totalTimeoutInput = document.getElementById('llmTotalTimeoutMs') as HTMLInputElement;
 const workingMemoryInput = document.getElementById('agentWorkingMemory') as HTMLInputElement;
+const actVisionInput = document.getElementById('actVision') as HTMLInputElement;
 const statusEl = document.getElementById('status') as HTMLElement;
 const testButton = document.getElementById('test') as HTMLButtonElement;
 const form = document.getElementById('form') as HTMLFormElement;
@@ -63,6 +64,7 @@ async function load(): Promise<void> {
   totalTimeoutInput.value =
     settings.llmTotalTimeoutMs != null ? String(settings.llmTotalTimeoutMs) : '';
   workingMemoryInput.checked = settings.agentWorkingMemory === true;
+  actVisionInput.checked = settings.actVision === true;
 }
 
 async function collect(): Promise<Settings> {
@@ -86,6 +88,7 @@ async function collect(): Promise<Settings> {
     llmFirstTokenTimeoutMs: parseTimeout(firstTokenTimeoutInput.value),
     llmTotalTimeoutMs: parseTimeout(totalTimeoutInput.value),
     agentWorkingMemory: workingMemoryInput.checked,
+    actVision: actVisionInput.checked,
   };
 }
 

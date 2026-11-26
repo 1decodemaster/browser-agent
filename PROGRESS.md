@@ -6,7 +6,23 @@
 
 ## Current status
 
-- **Extension version:** 0.19.0 (**R1 + R2 + R3 + R4 done**; **R5 deferred**).
+- **Extension version:** 0.20.0 (**R1 + R2 + R3 + R4 + R5 done**).
+- **v0.20.0 — R5 screenshot last resort (`look` op + vision channel)**:
+  - **`look` op** (`{op:"look"}`, no target): handled by the LOOP, not the page — the content
+    side reports it as loop-handled so a stray execute can't half-do it. When the plan calls
+    for it (and vision is on), the loop captures the tab via
+    `capturePageScreenshot` (`background/screenshot.ts`, extracted from index.ts, Chrome
+    `captureVisibleTab` / Firefox `captureTab`) and stores the JPEG data URL as
+    `state.pendingScreenshot`; the step's observation reads `look → ok — screenshot captured -
+    attached to your next step`. The NEXT plan request attaches it as an `image_url` content
+    part with a marker line (`userContentWithImage`); the pending shot is consumed once.
+  - **Gated by `Settings.actVision`** (default OFF, Options checkbox under Act mode): the
+    vision prompt section + `look` in the ops list only render when enabled (token cost);
+    vision off → `look → failed — vision is off - enable … in Options`.
+  - `look` counts as a real action for idle/step accounting; added to protocol.ts,
+    KNOWN_OPS + coerceAction, the ops doc line, and the act.ts switch.
+  - Mock `r5look` (look → sees image → status done); step records carry `has_image`. **T17**
+    5 checks incl. vision-off loop path. Suite 144/144.
 - **v0.19.0 — R4 loop control + conversation**:
   - **Plan `status` + `summary`**: every plan reply now carries
     `status: "continue"|"done"|"blocked"` and an optional `summary` (v1 + v2 schemas). `done`
@@ -498,7 +514,8 @@
     continue) instead of a hard error; raise per-step ops to ≤8 keeping navigation/submission/menu-open
     last.
   - Feed the tab's last ~10 conversation messages into the plan prompt (getHistory already exists).
-- [ ] **R5 — Screenshot last resort** (needs a vision-model channel; deferred)
+- [x] **R5 — Screenshot last resort** (v0.20.0 — `look` op + `actVision` gate, done as
+  described in Current status)
 
 Keep our wins the reference lacks: stuck/repeat detection, working memory + self-managed effort,
 post-submit readback, batch stop-and-report on navigation.

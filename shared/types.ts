@@ -9,6 +9,7 @@ export interface Settings {
   actModel?: string;
   actReasoningEffort?: string;
   actExtraInstructions?: string;
+  actVision?: boolean;
   llmFirstTokenTimeoutMs?: number;
   llmTotalTimeoutMs?: number;
   agentWorkingMemory?: boolean;

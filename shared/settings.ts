@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: Settings = {
   actModel: '',
   actReasoningEffort: '',
   actExtraInstructions: '',
+  actVision: false,
   sttEndpointUrl: '',
   sttModel: '',
   ttsAutoRead: false,

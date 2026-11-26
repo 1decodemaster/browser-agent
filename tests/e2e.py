@@ -327,6 +327,7 @@ def run_tests():
             t14_perception_fidelity(h)
             t15_reasoning_ops(h)
             t16_loop_control(h)
+            t17_vision_look(h)
         finally:
             h.context.close()
 
@@ -1213,6 +1214,51 @@ def t16_loop_control(h):
           narration[-400:])
     check('t16 op-cap run finished via status done', 'R4CAP COMPLETE' in narration,
           narration[-300:])
+    h.disable_act()
+
+
+def t17_vision_look(h):
+    print('\nT17: R5 vision - look op captures a screenshot and feeds it to the next step')
+    h.set_settings(model='r5look', actReasoningEffort='', agentWorkingMemory=False,
+                   actVision=True, llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+
+    # content-side guard: look executed directly (not via the loop) fails cleanly
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'look'}], 'confirmMode': 'never'})[0]
+    check('t17 look on the page side reports loop-handled',
+          not obs.get('ok') and 'agent loop' in (obs.get('message') or ''), str(obs))
+
+    # loop run with vision ON: look captures, the next step sees an image and finishes
+    goal = 'Read the page visually'
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t17 look captured a screenshot',
+          'look' in narration and 'screenshot captured' in narration, narration[-300:])
+    check('t17 vision run finished via status done', 'R5LOOK COMPLETE' in narration, narration[-200:])
+    records = json.load(urllib.request.urlopen(
+        MOCK_DEBUG + '/debug/requests?model=r5look', timeout=5))
+    steps = [r for r in records if r.get('step')]
+    check('t17 screenshot attached to a later step',
+          any(r.get('has_image') for r in steps), str(steps))
+
+    # loop run with vision OFF: look reports the enable hint and never captures
+    h.set_settings(model='r5look', actVision=False)
+    h.clear_agent_state()
+    goal2 = 'Try to look without vision'
+    h.send_text(goal2)
+    h.wait_agent_started(goal2)
+    state = h.wait_agent_paused(timeout=90)  # repeats look to the step cap -> steplimit pause
+    narration = '\n'.join(state.get('narration', []))
+    check('t17 look without vision reports the Options hint',
+          'vision is off' in narration, narration[:300])
     h.disable_act()
 
 

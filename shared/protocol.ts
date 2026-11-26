@@ -13,6 +13,7 @@ export type ActionOp =
   | { op: 'extract'; target?: number }
   | { op: 'navigate'; url: string }
   | { op: 'wait'; ms: number }
+  | { op: 'look' }
   | { op: 'done'; summary?: string };
 
 export interface ActionObservation {

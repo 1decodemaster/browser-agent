@@ -220,6 +220,15 @@
           <input id="agentWorkingMemory" type="checkbox" />
           Experimental: agent working memory + self-managed reasoning effort
         </label>
+        <label class="checkbox">
+          <input id="actVision" type="checkbox" />
+          Act model can see screenshots (vision) — enables the agent's <code>look</code> op
+        </label>
+        <p class="note">
+          When on, the agent may capture a screenshot of the page and receive it on its next step
+          (the <code>look</code> op). Use it only for vision-capable act models; it costs a lot of
+          prompt tokens. Leave off otherwise.
+        </p>
         <p class="note">
           When on, the agent keeps short working notes across steps (re-injected each turn) and picks the
           reasoning effort for its next step (low/medium/high; "off" disables thinking via
