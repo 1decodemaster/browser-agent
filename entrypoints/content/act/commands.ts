@@ -29,6 +29,25 @@ export function parseCommand(raw: string): ActionOp[] | null {
     return [{ op: 'key', target: Number(match[3]!), key: normalizeKeyName(match[1]!) }];
   }
 
+  const selectMatch = text.match(/^select\s+("([^"]*)"|'([^']*)'|(\S+))\s+in(to)?\s+(\d+)$/i);
+  if (selectMatch) {
+    const value = selectMatch[2] ?? selectMatch[3] ?? selectMatch[4] ?? '';
+    return [{ op: 'select', target: Number(selectMatch[6]), value }];
+  }
+
+  if ((match = lower.match(/^find\s+(.+)$/))) {
+    const query = match[1]!.trim().replace(/^["']|["']$/g, '');
+    if (query) return [{ op: 'find', text: query }];
+  }
+
+  if ((match = lower.match(/^inspect (\d+)$/))) {
+    return [{ op: 'inspect', target: Number(match[1]) }];
+  }
+
+  if ((match = lower.match(/^focus (\d+)$/))) {
+    return [{ op: 'focus', target: Number(match[1]) }];
+  }
+
   if ((match = lower.match(/^extract (\d+)$/))) {
     return [{ op: 'extract', target: Number(match[1]) }];
   }
@@ -71,6 +90,10 @@ export const COMMAND_HELP = [
   'Local commands (anything else goes to the LLM, or starts an agent run when Act is on):',
   '  click <n> — click indexed element',
   '  type "text" into <n> [and submit] — fill a field',
+  '  select "text" in <n> — pick a native <select> option by text or value',
+  '  find "text" — locate elements by name/text anywhere on the page',
+  '  inspect <n> — full detail on an element (text, position, surroundings)',
+  '  focus <n> — focus a field',
   '  key <Enter|ArrowDown|Escape|…> in <n> — press a key on a field',
   '  clear <n> — empty a field',
   '  extract <n> — read element text into the chat',

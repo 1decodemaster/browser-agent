@@ -293,6 +293,7 @@ def run_tests():
             t12_key_op_and_persistent_ids(h)
             t13_destructive_submit_gate(h)
             t14_perception_fidelity(h)
+            t15_reasoning_ops(h)
         finally:
             h.context.close()
 
@@ -931,6 +932,143 @@ def t14_perception_fidelity(h):
           'is checked' in (obs[1].get('message') or ''), str(obs[1]))
     check('t14 extract reports selected option',
           'selected "Economy"' in (obs[2].get('message') or ''), str(obs[2]))
+
+
+def t15_reasoning_ops(h):
+    print('\nT15: R3 reasoning ops - select / find / inspect / focus')
+    h.set_settings(model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    index = h.observe()['index']
+    cabin_id = id_of(index, '"Cabin class"')
+    dep_id = id_of(index, '"Departure time"')
+    deal_id = id_of(index, 'Deal to City 1')
+    check('t15 fields indexed', None not in (cabin_id, dep_id, deal_id))
+
+    # select: pick by visible text; input/change events fire for framework listeners
+    h.page.evaluate("""() => {
+      window.__r3 = { changes: 0 };
+      document.getElementById('cabin').addEventListener('change', () => window.__r3.changes++);
+    }""")
+    obs = h.rpc({'kind': 'act:execute',
+                 'actions': [{'op': 'select', 'target': cabin_id, 'value': 'Business'}],
+                 'confirmMode': 'never'})[0]
+    check('t15 select ok', obs.get('ok'), str(obs))
+    check('t15 select reports chosen option',
+          'selected "Business"' in (obs.get('message') or ''), str(obs))
+    check('t15 native select value changed',
+          h.page.evaluate("document.querySelector('#cabin')?.value") == 'Business')
+    check('t15 change event fired for framework listeners',
+          h.page.evaluate('window.__r3.changes') == 1)
+
+    # select failures: no such option / target holds no select
+    obs = h.rpc({'kind': 'act:execute',
+                 'actions': [{'op': 'select', 'target': cabin_id, 'value': 'Nonsense'}],
+                 'confirmMode': 'never'})[0]
+    check('t15 select with no match fails and lists options',
+          not obs.get('ok') and 'Economy' in (obs.get('message') or ''), str(obs))
+    obs = h.rpc({'kind': 'act:execute',
+                 'actions': [{'op': 'select', 'target': deal_id, 'value': 'x'}],
+                 'confirmMode': 'never'})[0]
+    check('t15 select on a non-select target fails cleanly',
+          not obs.get('ok') and 'holds no <select>' in (obs.get('message') or ''), str(obs))
+
+    # find over the index: the contextually-named checkbox
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'find', 'text': 'Window seat'}],
+                 'confirmMode': 'never'})[0]
+    check('t15 find locates an indexed element by name',
+          obs.get('ok') and re.search(r'\[\d+\] checkbox "Window seat"', obs.get('message') or ''),
+          str(obs))
+
+    # find pass 2: a plain div the indexer skips is discovered, gets an id, keeps it
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'find', 'text': 'Baggage fee'}],
+                 'confirmMode': 'never'})[0]
+    message = obs.get('message') or ''
+    check('t15 find discovers a non-indexed element',
+          obs.get('ok') and re.search(r'\[\d+\] div "Baggage fee', message), message)
+    check('t15 find lists nearby controls for the discovered row',
+          'controls:' in message and 'checkbox' in message, message)
+    found = re.search(r'\[(\d+)\] div "Baggage fee', message)
+    found_id = int(found.group(1)) if found else None
+    if found_id is not None:
+        after = h.observe()['index']
+        check('t15 discovered element keeps its id in the next index',
+              f'[{found_id}] div "Baggage fee' in after,
+              '\n'.join(after.splitlines()[:8]))
+        obs2 = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'inspect', 'target': found_id}],
+                      'confirmMode': 'never'})[0]
+        detail = obs2.get('message') or ''
+        check('t15 inspect reports text + position + surroundings',
+              obs2.get('ok') and 'text: Baggage fee' in detail and 'position:' in detail
+              and 'controls here:' in detail, detail)
+    else:
+        check('t15 discovered element keeps its id in the next index', False, message)
+        check('t15 inspect reports text + position + surroundings', False, message)
+
+    # inspect on an indexed select + dead id (the select's container holds no other
+    # controls, so the state must show on the header line itself)
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'inspect', 'target': cabin_id}],
+                 'confirmMode': 'never'})[0]
+    header = (obs.get('message') or '').splitlines()[0] if obs.get('message') else ''
+    check('t15 inspect reports live state on the header line',
+          obs.get('ok') and 'combobox "Cabin class" = "Business"' in header, str(obs))
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'inspect', 'target': 99999}],
+                 'confirmMode': 'never'})[0]
+    check('t15 inspect on a dead id fails', not obs.get('ok'), str(obs))
+
+    # focus
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'focus', 'target': dep_id}],
+                 'confirmMode': 'never'})[0]
+    check('t15 focus ok', obs.get('ok'), str(obs))
+    check('t15 field is focused',
+          h.page.evaluate("document.activeElement?.id || ''") == 'dep-time')
+
+    # find with no hits anywhere
+    obs = h.rpc({'kind': 'act:execute', 'actions': [{'op': 'find', 'text': 'zzzqqq'}],
+                 'confirmMode': 'never'})[0]
+    check('t15 find with no hits fails with a hint',
+          not obs.get('ok') and 'no element' in (obs.get('message') or ''), str(obs))
+
+    # full agent run: select + focus survive parse (KNOWN_OPS) and execute
+    goal = 'Pick Business cabin and focus the departure field'
+    h.set_settings(model='r3select')
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t15 select run finished without error', 'Error' not in narration, narration[-300:])
+    check('t15 select op survived parse+execute', 'selected "Business"' in narration, narration)
+    check('t15 focus op survived parse+execute', 'focused' in narration, narration)
+    check('t15 select run done summary', 'R3SELECT COMPLETE' in narration, narration[-200:])
+    check('t15 cabin now Business',
+          h.page.evaluate("document.querySelector('#cabin')?.value") == 'Business')
+    h.disable_act()
+
+    # full agent run: find, then act on the discovered id in the next step.
+    # Fresh document: the hint div is undiscovered again, so step 1 must run find.
+    goal2 = 'Read the baggage fee hint'
+    h.set_settings(model='r3find')
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal2)
+    h.wait_agent_started(goal2)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t15 find run finished without error', 'Error' not in narration, narration[-300:])
+    check('t15 find op ran in the agent loop', 'find \u2192 ok' in narration, narration)
+    check('t15 inspect acted on the found id',
+          'inspect' in narration and 'text: Baggage fee' in narration, narration)
+    check('t15 find run done summary', 'R3FIND COMPLETE' in narration, narration[-200:])
+    h.disable_act()
 
 
 if __name__ == '__main__':

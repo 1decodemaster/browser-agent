@@ -1,4 +1,4 @@
-const BEHAVIORAL_SELECTOR =
+export const BEHAVIORAL_SELECTOR =
   'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="switch"], [role="searchbox"], [role="combobox"], [onclick]';
 
 function isBehavioral(element: HTMLElement): boolean {

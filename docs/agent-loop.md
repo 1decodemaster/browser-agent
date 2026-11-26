@@ -1,6 +1,6 @@
 # Agent loop — how a run works
 
-> Reference for `v0.17.x`. Generated from the fix-branch code; line numbers drift, function
+> Reference for `v0.18.x`. Generated from the fix-branch code; line numbers drift, function
 > names are stable. The loop lives in `entrypoints/background/agent.ts`; the page side in
 > `entrypoints/content/act/`.
 
@@ -24,11 +24,12 @@ You (panel)                 Background SW (agent.ts)              Page (content 
     │                              │   │  parseActionResponse ──► {thought, memory?, effort?, actions}
     │                              │   │  coerceAction ──► validated ops
     │                              │   │ 3. ACT                        │
-    │                              ├──act:execute (RPC)────────────────►│ executeActions
-     │                              │   │  ▲ observations[]              │   runAction → click/type/key/
-     │                              │   │                                │   extract/navigate/wait; confirm
-     │                              │   │                                │   gate; submitForm (Enter-first);
-     │                              │   │                                │   batch stops on nav
+     │                              ├──act:execute (RPC)────────────────►│ executeActions
+      │                              │   │  ▲ observations[]              │   runAction → click/type/key/
+      │                              │   │                                │   select/find/inspect/focus/
+      │                              │   │                                │   extract/navigate/wait; confirm
+      │                              │   │                                │   gate; submitForm (Enter-first);
+      │                              │   │                                │   batch stops on nav
     │                              │   │ 4. NARRATE + PUSH              │
     │  ◄── agent.step (port) ───────┤ notify (tabPorts)                  │
     │                              │   repeat until done / limit / stop │
@@ -63,7 +64,8 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    typed `LlmTimeoutError`, `[llm] POST …` logged per attempt.
 
 4. **Parse** — `parseActionResponse` tolerantly extracts the JSON object (fenced or bare),
-   `coerceAction` whitelists ops (`click/type/key/scroll/extract/navigate/wait/done`).
+   `coerceAction` whitelists ops (`click/type/key/select/find/inspect/focus/scroll/extract/
+   navigate/wait/done`).
    Invalid replies retry once with feedback; two consecutive timeouts abort the run with a
    readable error.
 
@@ -82,7 +84,15 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    reports a post-submit readback (field value + nearby chip text). `submitForm` dispatches Enter on
    the field first (autocomplete commit), falling back to `form.requestSubmit`. The loop then
    settles before the next observe: 800 ms after a navigating batch, 400 ms otherwise
-   (`ActionObservation.navigating`, carried by the channel-lost fallback too).
+   (`ActionObservation.navigating`, carried by the channel-lost fallback too). Reasoning ops
+   (R3): `select` sets a native `<select>` through the prototype value setter + input/change
+   (option matched by text or value; a miss lists the options) and joins the batch navigation
+   check; `find` matches indexed elements by name/state/text, then falls back to any visible
+   element whose own direct text matches — those are added to the table on the fly
+   (`markDiscovered`, ids persist into later tables) with each non-interactive hit listing the
+   interactive controls in its nearest container; `inspect` reports text, ordinal position,
+   before/after text, ancestor context, and the controls sharing the container; `focus` focuses
+   a field. Read-only ops never ask for confirmation.
 
 6. **Narrate + push** — observations are formatted into the narration (trimmed to 40 lines /
    16k chars), pushed over the panel port via `notify` (`agent.step`). A missing port is logged

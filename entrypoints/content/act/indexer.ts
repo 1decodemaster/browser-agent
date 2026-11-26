@@ -39,6 +39,15 @@ const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 const persistentIds = new WeakMap<Element, number>();
 let idCounter = 1;
 
+// Elements surfaced by the find op that the indexer would otherwise skip (plain divs/spans
+// with no behavior): they are added to every later table as content entries so the ids the
+// find result reported stay resolvable and visible across steps.
+const discovered = new WeakSet<Element>();
+
+export function markDiscovered(element: Element): void {
+  discovered.add(element);
+}
+
 export class ElementTable {
   readonly info = new Map<number, ElementInfo>();
   readonly elements = new Map<number, Element>();
@@ -113,10 +122,13 @@ function visit(
 
   const interactive = isInteractive(element, tag, cursorCache);
   const content = CONTENT_TAGS.has(tag);
-  if (interactive || content) {
+  if (interactive || content || discovered.has(element)) {
     const rect = element.getBoundingClientRect();
     if (rect.width >= 2 && rect.height >= 2) {
-      const name = accessibleName(element, tag) || (interactive ? contextualName(element) : '');
+      const name =
+        accessibleName(element, tag) ||
+        (interactive ? contextualName(element) : '') ||
+        collapse((element as HTMLElement).innerText ?? '');
       const prevId = previous?.idFor(element);
       const isFresh =
         previous != null && (prevId === undefined || previous.info.get(prevId)?.fresh === true);
@@ -341,12 +353,12 @@ function minusOwnText(control: Element, text: string): string {
 // Still-unnamed controls borrow their surroundings: the nearest row/cell-ish container's
 // text (<=200 chars), prefixed by the short text neighbour directly before the control when
 // that neighbour adds position ("$150 (Economy window seat ...)").
-const CONTEXT_CONTAINER_SELECTOR =
+export const CONTAINER_SELECTOR =
   'tr, li, td, th, dt, dd, p, fieldset, figure, [role="row"], [role="listitem"], ' +
   '[role="cell"], [role="gridcell"], [role="option"], [role="menuitem"], [role="group"]';
 
 function contextualName(element: Element): string {
-  const container = element.closest(CONTEXT_CONTAINER_SELECTOR);
+  const container = element.closest(CONTAINER_SELECTOR);
   let base = '';
   if (container && container !== element && container !== document.body) {
     base = minusOwnText(element, container.textContent ?? '');
@@ -375,7 +387,7 @@ function precedingShortText(element: Element): string {
   return '';
 }
 
-function collapse(text: string): string {
+export function collapse(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
@@ -383,7 +395,7 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function truncate(text: string, max: number): string {
+export function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
@@ -418,7 +430,7 @@ export function serializeTable(table: ElementTable, maxEntries = 320): string {
   const cap = maxEntries + freshShown.length;
   if (freshShown.length) {
     picked.unshift(
-      'Recently appeared (dropdown/popover options you just opened are listed here - click a matching row):',
+      'Recently appeared (dropdown/popover options you just opened, or elements surfaced by find, are listed here - act on a matching row):',
       ...freshShown,
     );
   }
@@ -434,7 +446,7 @@ export function serializeTable(table: ElementTable, maxEntries = 320): string {
     contentOffscreen.length;
   if (total > picked.length) {
     picked.push(
-      `…(${total - picked.length} more elements not shown - scroll the page to reveal them, or extract with no target to read the whole page text)`,
+      `…(${total - picked.length} more elements not shown - use find "text" to locate a specific element anywhere on the page and get its id, or scroll the page to reveal them)`,
     );
   }
   return picked.join('\n');

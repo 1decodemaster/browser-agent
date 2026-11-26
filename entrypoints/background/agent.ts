@@ -45,10 +45,10 @@ const AGENT_SYSTEM_LINES = [
   'You are Browser Agent, an autonomous assistant operating the user\'s web page through a numbered element index.',
   'Respond ONLY with a single JSON object, no prose:',
   '{"v":1,"thought":"short reasoning","actions":[...]}',
-  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
+  'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"select","target":N,"value":"..."} (native <select>; value is matched against option text or value) | {"op":"find","text":"..."} (search the whole page for an element by name/text and get its id - use it when the element you need is not in the index instead of scrolling blindly) | {"op":"inspect","target":N} (full detail on one element: text, position, surrounding text, nearby controls) | {"op":"focus","target":N} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
   'Before setting a value, check whether the index already shows the desired state (e.g. a button or chip already labeled with the target date, city, or passenger count) - if it does, act on that element instead of re-entering the value.',
   'Index lines carry live state: = "..." is a field\'s current value or a select\'s selected option (selects also list their options after "opts:"), and [checked] / [disabled] / [expanded] are flags - read the state instead of guessing, and extract on a field re-reads its value / checked state.',
-  'Rules: 1-3 actions per step. "navigate" must be the LAST action of a step - the next step observes the new page, so never batch extract/wait/click after it. On article pages, use extract with no target to read the main text before answering. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
+  'Rules: 1-3 actions per step. "navigate" must be the LAST action of a step - the next step observes the new page, so never batch extract/wait/click after it. On article pages, use extract with no target to read the main text before answering. Use select on native <select> dropdowns - clicking one only opens the OS dropdown. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. find "text" returns matching elements with their ids (found elements stay in later indexes) - run find in one step, then act on the id in the next step. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
 ];
 
 const SCHEMA_V1 = '{"v":1,"thought":"short reasoning","actions":[...]}';
@@ -588,6 +588,10 @@ const KNOWN_OPS = new Set([
   'click',
   'type',
   'key',
+  'select',
+  'find',
+  'inspect',
+  'focus',
   'scroll',
   'extract',
   'navigate',
@@ -612,6 +616,16 @@ function coerceAction(candidate: unknown): ActionOp | null {
       return target != null && typeof record.key === 'string'
         ? { op: 'key', target, key: record.key }
         : null;
+    case 'select':
+      return target != null && typeof record.value === 'string'
+        ? { op: 'select', target, value: record.value }
+        : null;
+    case 'find':
+      return typeof record.text === 'string' ? { op: 'find', text: record.text } : null;
+    case 'inspect':
+      return target != null ? { op: 'inspect', target } : null;
+    case 'focus':
+      return target != null ? { op: 'focus', target } : null;
     case 'scroll':
       return 'to' in record &&
         typeof record.to === 'string' &&
@@ -638,7 +652,7 @@ function formatObservation(observation: ActionObservation): string {
   if (!observation.ok) {
     return `  ${label} → failed — ${observation.message ?? 'unknown error'}`;
   }
-  if (observation.op === 'extract') {
+  if (observation.op === 'extract' || observation.op === 'find' || observation.op === 'inspect') {
     return `  ${label} → ok (${observation.message?.length ?? 0} chars):\n${observation.message ?? ''}`;
   }
   return `  ${label} → ok${observation.message ? ` — ${observation.message}` : ''}`;

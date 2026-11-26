@@ -15,6 +15,10 @@ Behaviors are selected via the model name in the request:
                           in `thought`, making the loop observable in narration.
   synth-delay-<seconds> - instant for agent steps, delayed for the answer
                           synthesis call (delivery/fallback probe).
+  r3select            - R3 ops: select Business in the Cabin class <select> and
+                        focus the Departure time field, then done.
+  r3find              - R3 ops: find the non-indexed baggage-hint text, then
+                        inspect the discovered id from the narration, then done.
 
 Speech: voice "slow-<seconds>" delays each speech response by <seconds>
         (pipelining/first-word probes). Records carry received_t (request
@@ -269,6 +273,41 @@ class Handler(BaseHTTPRequestHandler):
     def build_reply(self, payload, prompt, model):
         if model == 'memsched':
             return memsched_reply(payload, prompt)
+        if model == 'r3select':
+            if is_agent_step(prompt):
+                entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
+                cabin = dep = None
+                for eid, role, name in entries:
+                    if role == 'combobox' and 'Cabin class' in name:
+                        cabin = int(eid)
+                    if role == 'textbox' and 'Departure time' in name:
+                        dep = int(eid)
+                actions = []
+                if cabin is not None:
+                    actions.append({'op': 'select', 'target': cabin, 'value': 'Business'})
+                if dep is not None:
+                    actions.append({'op': 'focus', 'target': dep})
+                actions.append({'op': 'done', 'summary': 'R3SELECT COMPLETE'})
+                return json.dumps({
+                    'v': 1,
+                    'thought': 'select Business in the cabin select, focus departure',
+                    'actions': actions,
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r3find':
+            if is_agent_step(prompt):
+                found = re.search(r'\[(\d+)\] div "Baggage fee', prompt)
+                if found:
+                    actions = [
+                        {'op': 'inspect', 'target': int(found.group(1))},
+                        {'op': 'done', 'summary': 'R3FIND COMPLETE'},
+                    ]
+                    thought = 'inspect the element the find op surfaced'
+                else:
+                    actions = [{'op': 'find', 'text': 'Baggage fee'}, {'op': 'wait', 'ms': 100}]
+                    thought = 'find the baggage hint text, then act on its id next step'
+                return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
         if model == 'keytest':
             if is_agent_step(prompt):
                 entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)

@@ -4,6 +4,10 @@ export type ActionOp =
   | { op: 'click'; target: number }
   | { op: 'type'; target: number; text: string; submit?: boolean }
   | { op: 'key'; target: number; key: string }
+  | { op: 'select'; target: number; value: string }
+  | { op: 'find'; text: string }
+  | { op: 'inspect'; target: number }
+  | { op: 'focus'; target: number }
   | { op: 'scroll'; to: ScrollTarget }
   | { op: 'scroll'; target: number }
   | { op: 'extract'; target?: number }

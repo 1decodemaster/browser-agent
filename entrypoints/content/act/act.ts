@@ -1,6 +1,26 @@
-import { buildElementTable, ElementTable, serializeTable } from './indexer';
+import {
+  buildElementTable,
+  collapse,
+  CONTAINER_SELECTOR,
+  ElementTable,
+  markDiscovered,
+  serializeTable,
+  truncate,
+  type ElementInfo,
+} from './indexer';
 import { mountSpotlight, type ActionItem, type Spotlight } from './spotlight';
-import { clickElement, copyText, findClickTarget, focusElement, isSyntheticClick, pressKey, readFieldValue, setContentEditableValue, setValue } from './executor';
+import {
+  BEHAVIORAL_SELECTOR,
+  clickElement,
+  copyText,
+  findClickTarget,
+  focusElement,
+  isSyntheticClick,
+  pressKey,
+  readFieldValue,
+  setContentEditableValue,
+  setValue,
+} from './executor';
 import type { ActionObservation, ActionOp, ConfirmMode, ScrollTarget } from '@/shared/protocol';
 
 const ACT_HOST_ID = 'browser-agent-act-root';
@@ -127,7 +147,12 @@ export async function executeActions(
     const observation = await runAction(action, current, confirmMode);
     observations.push(observation);
     let navigating = action.op === 'navigate' || navigationPending;
-    if (!navigating && (action.op === 'click' || (action.op === 'type' && action.submit === true))) {
+    if (
+      !navigating &&
+      (action.op === 'click' ||
+        action.op === 'select' ||
+        (action.op === 'type' && action.submit === true))
+    ) {
       await abortableDelay(40);
       navigating = crossDocumentNavStarted;
     }
@@ -265,6 +290,75 @@ async function runAction(
         flashSuccess(resolved.element);
         return { ...base, ok: true, message: `pressed ${action.key}` };
       }
+      case 'select': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        const select = findSelect(resolved.element);
+        if (!select) {
+          return {
+            ...base,
+            ok: false,
+            message: `[${action.target}] holds no <select> - use click on dropdown rows, or type into combobox fields`,
+          };
+        }
+        if (select.disabled) return { ...base, ok: false, message: 'select is disabled' };
+        const matched = matchOption(select, action.value);
+        if (!matched) {
+          const options = Array.from(select.options)
+            .map((option) => option.text.trim() || option.value)
+            .filter(Boolean)
+            .slice(0, 20)
+            .join(', ');
+          return {
+            ...base,
+            ok: false,
+            message: `no option matching "${action.value}" in [${action.target}] - options: ${truncate(options, 200)}`,
+          };
+        }
+        sp.highlight(select.getBoundingClientRect(), 'focus', true);
+        selectOption(select, matched);
+        flashSuccess(select);
+        return {
+          ...base,
+          ok: true,
+          message: `selected "${truncate(matched.text.trim() || matched.value, 60)}"`,
+        };
+      }
+      case 'find': {
+        const query = action.text.trim();
+        if (query.length < 2) {
+          return { ...base, ok: false, message: 'find needs at least 2 characters to search for' };
+        }
+        const message = findElements(current, query);
+        return { ...base, ok: !message.startsWith('no element'), message };
+      }
+      case 'inspect': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        sp.highlight(resolved.element.getBoundingClientRect(), 'success');
+        window.setTimeout(() => {
+          if (active && pinned?.element === resolved.element) {
+            sp.highlight(resolved.element.getBoundingClientRect(), 'focus', true);
+          } else {
+            sp.hideHighlight();
+          }
+        }, 600);
+        return { ...base, ok: true, message: inspectElement(resolved.element, resolved.info, current) };
+      }
+      case 'focus': {
+        const resolved = resolve(action.target, current);
+        if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
+        const editable = findEditable(resolved.element);
+        if (editable instanceof HTMLInputElement && editable.disabled) {
+          return { ...base, ok: false, message: 'field is disabled' };
+        }
+        const target = editable ?? resolved.element;
+        sp.highlight(target.getBoundingClientRect(), 'focus', true);
+        focusElement(target);
+        flashSuccess(target);
+        const name = resolved.info.name ? ` "${resolved.info.name}"` : '';
+        return { ...base, ok: true, message: `focused [${action.target}] ${resolved.info.role}${name}` };
+      }
       case 'scroll': {
         if ('to' in action) {
           scrollToTarget(action.to);
@@ -341,7 +435,7 @@ async function awaitConfirm(rect: DOMRect, text: string): Promise<boolean> {
 function resolve(
   id: number,
   current: ElementTable,
-): { element: HTMLElement; info: { tag: string; role: string; kind: string; name: string } } | null {
+): { element: HTMLElement; info: ElementInfo } | null {
   const hit = current.get(id);
   if (!hit) return null;
   if (!(hit.element instanceof HTMLElement) || !hit.element.isConnected) return null;
@@ -456,6 +550,257 @@ function fieldReport(element: HTMLElement): string | null {
     return `selected "${selected}" (options: ${options.join(', ')})`;
   }
   return null;
+}
+
+// --- R3 reasoning ops -------------------------------------------------------
+
+function findSelect(element: HTMLElement): HTMLSelectElement | null {
+  if (element instanceof HTMLSelectElement) return element;
+  const descendant = element.querySelector<HTMLSelectElement>('select');
+  return descendant instanceof HTMLSelectElement ? descendant : null;
+}
+
+function matchOption(select: HTMLSelectElement, query: string): HTMLOptionElement | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const options = Array.from(select.options);
+  for (const option of options) {
+    if (
+      option.value.trim().toLowerCase() === q ||
+      option.text.trim().toLowerCase() === q
+    ) {
+      return option;
+    }
+  }
+  for (const option of options) {
+    const text = option.text.trim().toLowerCase();
+    if (text && (text.includes(q) || q.includes(text))) return option;
+  }
+  return null;
+}
+
+// Native value setter + input/change so framework listeners see the pick (synthetic clicks
+// only open the OS dropdown, which nothing on the page can resolve).
+function selectOption(select: HTMLSelectElement, option: HTMLOptionElement): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+  if (setter) setter.call(select, option.value);
+  else select.value = option.value;
+  select.dispatchEvent(new Event('input', { bubbles: true }));
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+const FIND_MATCH_CAP = 12;
+const FIND_CONTROL_CAP = 4;
+
+// find: match indexed elements by name/state/text first; when nothing indexed matches, look
+// for any visible element whose own direct text matches and add it to the table on the fly so
+// it gets an id (ids persist into later tables via the indexer's discovered set). Each
+// non-interactive hit lists the interactive controls in its nearest container so "find the
+// row" immediately yields the checkbox/button to act on.
+function findElements(table: ElementTable, query: string): string {
+  const q = query.toLowerCase();
+  interface Hit {
+    id: number;
+    info: ElementInfo;
+    element: Element;
+    text: string;
+  }
+  const hits: Hit[] = [];
+  for (const id of table.order) {
+    const hit = table.get(id);
+    if (!hit) continue;
+    const text = collapse((hit.element as HTMLElement).innerText ?? '');
+    const state = hit.info.state ?? '';
+    if (
+      !hit.info.name.toLowerCase().includes(q) &&
+      !state.toLowerCase().includes(q) &&
+      !text.toLowerCase().includes(q)
+    ) {
+      continue;
+    }
+    hits.push({ id, info: hit.info, element: hit.element, text });
+  }
+  hits.sort((a, b) => a.text.length - b.text.length);
+  const lines: string[] = [];
+  for (const hit of hits.slice(0, FIND_MATCH_CAP)) {
+    lines.push(describeHit(table, hit.id, hit.info, hit.element, hit.info.kind));
+  }
+  if (hits.length > FIND_MATCH_CAP) {
+    lines.push(`…(${hits.length - FIND_MATCH_CAP} more matches)`);
+  }
+  if (lines.length) {
+    return `found ${Math.min(hits.length, FIND_MATCH_CAP)} of ${hits.length} match(es) for "${truncate(query, 60)}":\n${lines.join('\n')}`;
+  }
+  const discovered2 = discoverByText(q);
+  if (!discovered2.length) {
+    return `no element matching "${truncate(query, 60)}" - try different or shorter wording, or scroll and observe again`;
+  }
+  const discoveredLines: string[] = [];
+  for (const hit of discovered2.slice(0, FIND_MATCH_CAP)) {
+    markDiscovered(hit.element);
+    const id = table.add(
+      hit.element,
+      hit.tag,
+      'content',
+      truncate(collapse(hit.ownText), 200),
+      true,
+      hit.inViewport,
+    );
+    discoveredLines.push(describeHit(table, id, table.info.get(id)!, hit.element, 'content'));
+  }
+  return `no indexed match; found ${discoveredLines.length} element(s) by their own text for "${truncate(query, 60)}" (added to the index):\n${discoveredLines.join('\n')}`;
+}
+
+function describeHit(
+  table: ElementTable,
+  id: number,
+  info: ElementInfo,
+  element: Element,
+  kind: string,
+): string {
+  const line =
+    `[${id}] ${info.role}${info.name ? ` "${truncate(info.name, 120)}"` : ''}` +
+    `${info.state ? ` ${info.state}` : ''}` +
+    `${element instanceof HTMLAnchorElement && element.href ? ` -> ${element.href}` : ''}`;
+  if (kind === 'interactive') return line;
+  const controls = nearbyControls(table, element);
+  return controls.length ? `${line} -> controls: ${controls.join(', ')}` : line;
+}
+
+function nearbyControls(table: ElementTable, element: Element): string[] {
+  let scope: Element | null =
+    element.querySelector(BEHAVIORAL_SELECTOR) ? element : element.closest(CONTAINER_SELECTOR);
+  if (!scope || scope === document.body) scope = element.parentElement;
+  if (!scope) return [];
+  const controls: string[] = [];
+  for (const control of Array.from(scope.querySelectorAll<HTMLElement>(BEHAVIORAL_SELECTOR))) {
+    if (control === element || controls.length >= FIND_CONTROL_CAP) break;
+    const rect = control.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    const id = table.idFor(control);
+    if (id == null) continue;
+    const info = table.info.get(id)!;
+    controls.push(
+      `[${id}] ${info.role}${info.name ? ` "${truncate(info.name, 60)}"` : ''}${info.state ? ` ${info.state}` : ''}`,
+    );
+  }
+  return controls;
+}
+
+interface DiscoveredHit {
+  element: Element;
+  tag: string;
+  ownText: string;
+  inViewport: boolean;
+}
+
+// Pass 2 of find: elements the indexer skips (plain divs/spans with no behavior) that carry
+// the query in their own direct text nodes.
+function discoverByText(q: string): DiscoveredHit[] {
+  const hits: DiscoveredHit[] = [];
+  for (const element of document.body.querySelectorAll('*')) {
+    if (hits.length >= FIND_MATCH_CAP * 2) break;
+    const tag = element.tagName.toLowerCase();
+    if (SKIP_DISCOVERY_TAGS.has(tag)) continue;
+    if (element.id && isOwnHost(element)) continue;
+    let ownText = '';
+    for (const node of element.childNodes) {
+      if (node.nodeType === 3) ownText += `${node.textContent ?? ''} `;
+    }
+    ownText = collapse(ownText);
+    if (!ownText || !ownText.toLowerCase().includes(q)) continue;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    hits.push({
+      element,
+      tag,
+      ownText,
+      inViewport:
+        rect.top < window.innerHeight &&
+        rect.bottom > 0 &&
+        rect.left < window.innerWidth &&
+        rect.right > 0,
+    });
+  }
+  hits.sort((a, b) => a.ownText.length - b.ownText.length);
+  return hits;
+}
+
+const SKIP_DISCOVERY_TAGS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'svg',
+  'canvas',
+  'iframe',
+  'head',
+  'meta',
+  'link',
+  'title',
+  'label',
+  'option',
+  'select',
+  'input',
+  'textarea',
+  'button',
+  'a',
+]);
+
+// inspect: everything the index line compresses away - own text, ordinal position, the text
+// right before/after, ancestor context, and the controls sharing the container.
+function inspectElement(
+  element: HTMLElement,
+  info: ElementInfo,
+  table: ElementTable,
+): string {
+  const parts: string[] = [
+    `[${info.id}] ${info.role}${info.name ? ` "${info.name}"` : ''}${info.state ? ` ${info.state}` : ''}`,
+  ];
+  const reported = fieldReport(element);
+  const own = collapse(reported ?? (element.innerText ?? ''));
+  if (own) parts.push(`text: ${truncate(own, 300)}`);
+  const parent = element.parentElement;
+  if (parent) {
+    const sameKind = Array.from(parent.children).filter(
+      (child) => child.tagName === element.tagName,
+    );
+    const position = sameKind.indexOf(element) + 1;
+    if (sameKind.length > 1) {
+      parts.push(
+        `position: ${position} of ${sameKind.length} ${element.tagName.toLowerCase()} inside ${parent.tagName.toLowerCase()}`,
+      );
+    }
+  }
+  const before = collapse((element.previousElementSibling as HTMLElement | null)?.innerText ?? '');
+  if (before) parts.push(`before: "${truncate(before, 80)}"`);
+  const after = collapse((element.nextElementSibling as HTMLElement | null)?.innerText ?? '');
+  if (after) parts.push(`after: "${truncate(after, 80)}"`);
+  const ancestors: string[] = [];
+  let node: HTMLElement | null = element.parentElement;
+  while (node && node !== document.body && ancestors.length < 2) {
+    const text = collapse(node.innerText ?? '');
+    if (text) ancestors.push(`"${truncate(text, 120)}"`);
+    node = node.parentElement;
+  }
+  if (ancestors.length) parts.push(`inside: ${ancestors.join(' > ')}`);
+  const container = element.closest(CONTAINER_SELECTOR) ?? parent;
+  if (container && container !== element) {
+    const controls: string[] = [];
+    for (const control of Array.from(container.querySelectorAll<HTMLElement>(BEHAVIORAL_SELECTOR))) {
+      if (control === element || controls.length >= FIND_CONTROL_CAP + 2) break;
+      const rect = control.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const id = table.idFor(control);
+      if (id == null) continue;
+      const controlInfo = table.info.get(id)!;
+      controls.push(
+        `[${id}] ${controlInfo.role}${controlInfo.name ? ` "${truncate(controlInfo.name, 60)}"` : ''}`,
+      );
+    }
+    if (controls.length) parts.push(`controls here: ${controls.join(', ')}`);
+  }
+  return parts.join('\n');
 }
 
 function findEditable(

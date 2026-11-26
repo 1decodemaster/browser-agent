@@ -6,7 +6,36 @@
 
 ## Current status
 
-- **Extension version:** 0.17.0 (**R1 + R2 done**; **R3 next**).
+- **Extension version:** 0.18.0 (**R1 + R2 + R3 done**; **R4 next**).
+- **v0.18.0 — R3 reasoning ops (select / find / inspect / focus)**:
+  - **`select {target, value}`**: native `<select>` set through the prototype value setter +
+    input/change events (framework listeners see the pick; synthetic clicks only open the OS
+    dropdown nothing can resolve). Option matched by text or value — exact (case-insensitive)
+    first, then substring both ways; a miss fails listing up to 20 options; drill-down finds a
+    descendant select. Reports `selected "X"`. `select` joins the batch navigation check
+    (a change event can start a navigation).
+  - **`find {text}`**: pass 1 matches indexed elements by name / state / element text (most
+    specific first, capped 12); pass 2 (nothing indexed matched) walks visible elements whose
+    *own direct text* matches and adds them to the table on the fly — `markDiscovered()` in
+    `indexer.ts` keeps them in every later table as content entries so their ids stay
+    resolvable and visible (ids are persistent-WeakMap based). Each non-interactive hit lists
+    the interactive controls in its nearest container ("find the row" → its checkbox/button,
+    cap 4). No hits → failure with a rewording hint. The truncation trailer now advertises
+    find instead of scroll/extract.
+  - **`inspect {target}`**: header line (role/name/state) + own text or the field report,
+    ordinal position among same-tag siblings, previous/next sibling text, nearest two
+    ancestors' text, and the controls in the same container (cap 6).
+  - **`focus {target}`**: drills to the editable like `type`, focuses, reports what was
+    focused; disabled fields fail. All four read-only ops never ask for confirmation.
+  - Every op added in the three places (protocol.ts, KNOWN_OPS + prompt doc line, runAction);
+    prompt ops line + rules updated (select for native selects, find instead of scrolling
+    blindly, found ids act on the next step). Local commands: `select "x" in <n>`,
+    `find "text"`, `inspect <n>`, `focus <n>` + help. `formatObservation` renders
+    find/inspect multi-line like extract.
+  - Fixture: plain `#baggage-hint` div (no behavior, not a content tag → invisible to the
+    indexer until find discovers it). Mock models `r3select` (select+focus+done agent run) and
+    `r3find` (find → inspect the discovered id from the narration → done). **T15** 22 checks.
+    Suite 122/122.
 - **v0.17.0 — R2 perception fidelity (state + names + budget)**:
   - **Live state on index lines**: `= "value"` (input/textarea value, select's selected option),
     capped `opts:` list for selects (>1 option; 12 shown, 120 chars), `[checked]`, `[disabled]`,
@@ -408,8 +437,8 @@
   - Post-action settle before re-observe: 800 ms after a navigating op, 400 ms otherwise (today only
     *empty* indexes are retried, so half-rendered pages pass the ≥20-char gate). `navigating` flag
     propagates on ActionObservation from executeActions.
-- [x] **R2 — Perception fidelity (state + names + budget)** (v0.17.0 — done as described, except
-  the trailer keeps scroll/extract wording until `find` exists in R3)
+- [x] **R2 — Perception fidelity (state + names + budget)** (v0.17.0; the trailer's scroll/
+  extract wording was replaced by the find wording in v0.18.0)
   - Live state on index lines: `= "value"`, `[checked]`, `[disabled]`, `[expanded]`, combobox selected
     option + capped option list. The system prompt already says "check whether the index already shows
     the desired state" — but the index shows no state (ADR 0.3.0: the model cannot act on a dependent
@@ -423,7 +452,8 @@
     the interactive budget).
   - Serialization order: fresh → in-viewport → DOM order; budgets 150 interactive / 320 total; trailer
     tells the model to use `find`. `extract` on a field reports its value / checked state.
-- [ ] **R3 — Reasoning ops: select / find / inspect / focus**
+- [x] **R3 — Reasoning ops: select / find / inspect / focus** (v0.18.0 — done as described in
+  Current status)
   - `select {target, value}`: option matched by text or value, native value setter + input/change,
     reports `selected "X"` — native `<select>` is un-actuable today (synthetic click opens the OS
     dropdown nothing can resolve; the key-op workaround was dead via the KNOWN_OPS bug).
