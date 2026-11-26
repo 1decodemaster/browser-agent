@@ -22,7 +22,9 @@
   - `look` counts as a real action for idle/step accounting; added to protocol.ts,
     KNOWN_OPS + coerceAction, the ops doc line, and the act.ts switch.
   - Mock `r5look` (look → sees image → status done); step records carry `has_image`. **T17**
-    5 checks incl. vision-off loop path. Suite 144/144.
+    5 checks incl. vision-off loop path. Also closes **A4** multi-page verification: fixtures
+    `wiki-*.html` + mock `wikihop` + **T18** (home → France → Paris hop answers the goal).
+    Suite 148/148.
 - **v0.19.0 — R4 loop control + conversation**:
   - **Plan `status` + `summary`**: every plan reply now carries
     `status: "continue"|"done"|"blocked"` and an optional `summary` (v1 + v2 schemas). `done`
@@ -445,9 +447,11 @@
     (Supervise = confirm every action on-page, Normal = destructive-only confirms, Auto = none);
     chat send/embeds disabled while the agent runs
   - RPC: `agent:get` (bg), `act:observe` / `act:execute{confirmMode}` (bg→content)
-- [ ] **A4 — Multi-page + grounding** (DEFERRED until after C3): cross-page navigate works via
-  the loop; remaining: screenshot/vision grounding in observe, Wikipedia-hop end-to-end test,
-  optional chrome.debugger trusted input (Chrome, opt-in)
+- [~] **A4 — Multi-page + grounding** (partially done): multi-page goals verified — the
+  Wikipedia-style hop home → France → Paris completes end-to-end with fixtures
+  `tests/fixtures/wiki-*.html` + mock `wikihop` + **T18** (4 checks, v0.20.0; the loop's
+  anchor-click navigation + observe retry carry the page changes); vision grounding shipped
+  as the R5 `look` op. Remaining (optional, not scheduled): chrome.debugger trusted input.
 
 ## Chat context + voice phases (planned)
 

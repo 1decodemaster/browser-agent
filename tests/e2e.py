@@ -328,6 +328,7 @@ def run_tests():
             t15_reasoning_ops(h)
             t16_loop_control(h)
             t17_vision_look(h)
+            t18_multi_page_hop(h)
         finally:
             h.context.close()
 
@@ -1259,6 +1260,38 @@ def t17_vision_look(h):
     narration = '\n'.join(state.get('narration', []))
     check('t17 look without vision reports the Options hint',
           'vision is off' in narration, narration[:300])
+    h.disable_act()
+    # leave no paused state behind: the panel would hijack the next composer
+    # message into resume mode instead of starting a fresh goal
+    h.clear_agent_state()
+    h.page.reload()
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+
+
+def t18_multi_page_hop(h):
+    print('\nT18: A4 multi-page goal - hop home -> France -> Paris and answer')
+    h.set_settings(model='wikihop', actReasoningEffort='', agentWorkingMemory=False,
+                   actVision=False, llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL.replace('kayak-like.html', 'wiki-a.html'))
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.5)
+    goal = 'What city is the capital of France, and how many people live there?'
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_finished(timeout=90)
+    narration = '\n'.join(state.get('narration', []))
+    check('t18 hop run finished without error', 'Error' not in narration, narration[-300:])
+    check('t18 two anchor hops executed',
+          'click' in narration and 'France' in narration and 'Paris' in narration,
+          narration[:500])
+    check('t18 answer in the done summary',
+          'capital of France is Paris' in narration and '2.1 million' in narration,
+          narration[-300:])
+    check('t18 run ended on the third page', 'wiki-paris' in h.page.url, h.page.url)
     h.disable_act()
 
 

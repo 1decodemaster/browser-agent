@@ -30,6 +30,8 @@ Behaviors are selected via the model name in the request:
   r4cap               - 11 ops in one step (per-step cap probe), then done.
   r5look              - R5 vision: returns the look op; finishes with status
                         done once an image is attached to the prompt.
+  wikihop             - A4 multi-page: home -> France -> Paris link hops, done
+                        on the third page with the extracted answer.
 
 Speech: voice "slow-<seconds>" delays each speech response by <seconds>
         (pipelining/first-word probes). Records carry received_t (request
@@ -437,6 +439,36 @@ class Handler(BaseHTTPRequestHandler):
                     'v': 1, 'thought': 'the index is not enough - take a look',
                     'status': 'continue', 'actions': [{'op': 'look'}],
                 }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'wikihop':
+            if is_agent_step(prompt):
+                entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
+                link = {}
+                for eid, role, name in entries:
+                    if role == 'link':
+                        link[name] = int(eid)
+                # identify the CURRENT page from the Page: line - hrefs serialized
+                # into the index (Back to home links) must not fool the branch
+                page_match = re.search(r'^Page: .* \((\S+)\)$', prompt, re.M)
+                page = (page_match.group(1).rsplit('/', 1)[-1] if page_match else '?')
+                if page == 'wiki-paris.html':
+                    actions = [{
+                        'op': 'done',
+                        'summary': 'The capital of France is Paris (population 2.1 million).',
+                    }]
+                    thought = 'found it on the second hop'
+                elif page == 'wiki-france.html':
+                    actions = [{'op': 'click', 'target': link['Paris']}] if 'Paris' in link \
+                        else [{'op': 'wait', 'ms': 200}]
+                    thought = 'the capital detail lives in the Paris article - hop'
+                elif page == 'wiki-a.html':
+                    actions = [{'op': 'click', 'target': link['France']}] if 'France' in link \
+                        else [{'op': 'wait', 'ms': 200}]
+                    thought = 'open the France article'
+                else:
+                    actions = [{'op': 'wait', 'ms': 200}]
+                    thought = 'lost, wait'
+                return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
             return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
         if is_agent_step(prompt):
             actions, thought = scripted_actions(prompt)
