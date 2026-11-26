@@ -6,7 +6,19 @@
 
 ## Current status
 
-- **Extension version:** 0.20.0 (**R1 + R2 + R3 + R4 + R5 done**).
+- **Extension version:** 0.20.1 (**R1 + R2 + R3 + R4 + R5 done**).
+- **v0.20.1 — 3-state autonomy toggle (normal / ASK FIRST / AUTO)**: the act-mode banner's
+  boolean Ask-first toggle became a cycle button `Autonomy: normal → ASK FIRST → AUTO (no
+  confirms)` — AUTO sends `confirmMode: never` so fills/submits run with no confirmation bar at
+  all (this is the fix for "confirms still appear on form fills even with Ask-first OFF" —
+  that OFF was *destructive*, which still gates submit). The confirm mode now flows through the
+  whole stack as the existing `ConfirmMode` instead of an `askFirst` boolean:
+  `agent.start.confirmMode`, `AgentState.confirmMode`, `AgentSummary.confirmMode`, banner
+  persisted in `__ba_act` (`{autonomy}`; legacy `{askFirst:true}` migrates to `always`). Local
+  composer commands also honour the banner autonomy. A payment/checkout carve-out under AUTO
+  (confirm only HIGH_RISK-pay names) is a ~3-line change in `needsConfirm` (short-circuit `never`
+  after a stricter pay pattern) but is label-heuristic and unreliable — deferred.
+  Mock `autosubmit` (t13's gating batch). **T19** 3 checks. Suite 151/151.
 - **v0.20.0 — R5 screenshot last resort (`look` op + vision channel)**:
   - **`look` op** (`{op:"look"}`, no target): handled by the LOOP, not the page — the content
     side reports it as loop-handled so a stray execute can't half-do it. When the plan calls

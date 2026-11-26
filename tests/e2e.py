@@ -329,6 +329,7 @@ def run_tests():
             t16_loop_control(h)
             t17_vision_look(h)
             t18_multi_page_hop(h)
+            t19_auto_mode(h)
         finally:
             h.context.close()
 
@@ -1293,6 +1294,56 @@ def t18_multi_page_hop(h):
           narration[-300:])
     check('t18 run ended on the third page', 'wiki-paris' in h.page.url, h.page.url)
     h.disable_act()
+
+
+def t19_auto_mode(h):
+    print('\nT19: Autonomy AUTO - type+submit runs with NO confirmation bar')
+    h.set_settings(model='autosubmit', actReasoningEffort='', agentWorkingMemory=False,
+                   actVision=False, llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL + '?auto=1')
+    h.page.wait_for_load_state('load')
+    # seed the act UI's own persisted autonomy, then reload so mountAct picks
+    # it up before the banner/goal flow (AUTO = never confirm)
+    h.page.evaluate("sessionStorage.setItem('__ba_act', JSON.stringify({ autonomy: 'never' }))")
+    h.page.reload()
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.4)
+
+    goal = 'Fill and submit the destination'
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+
+    # poll WITHOUT draining confirms: a confirm bar publishing __ba_confirm = failure
+    deadline = time.time() + 60
+    state = None
+    saw_confirm = False
+    while time.time() < deadline:
+        if h.page.evaluate("sessionStorage.getItem('__ba_confirm')"):
+            saw_confirm = True
+            break
+        state = h.agent_state()
+        if state and state.get('status') == 'finished':
+            time.sleep(0.4)
+            state = h.agent_state()
+            break
+        time.sleep(0.25)
+    check('t19 AUTO run never showed a confirm bar', not saw_confirm, str(state)[:200])
+    if state is None:
+        raise TimeoutError(f'agent did not finish under AUTO: {h.agent_state()}')
+    narration = '\n'.join(state.get('narration', []))
+    check('t19 AUTO run finished cleanly', 'Error' not in narration and state.get('status') == 'finished',
+          f'{state.get("status")} {narration[-200:]}')
+    check('t19 destructive submit actually committed under AUTO',
+          h.page.evaluate("document.querySelector('#dest-group .chip')?.textContent || ''").find('San Francisco') >= 0,
+          h.page.evaluate("document.querySelector('#dest-group .chip')?.textContent || ''"))
+
+    # leave a clean state for anything downstream
+    h.disable_act()
+    h.page.evaluate("sessionStorage.removeItem('__ba_act')")
+    h.clear_agent_state()
 
 
 if __name__ == '__main__':

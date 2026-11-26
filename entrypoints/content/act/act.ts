@@ -29,7 +29,7 @@ const ACT_UI_KEY = '__ba_act';
 
 let spotlight: Spotlight | null = null;
 let active = false;
-let askFirst = false;
+let autonomy: ConfirmMode = 'destructive';
 let pinnedTable: ElementTable | null = null;
 let table: ElementTable | null = null;
 let tableDirty = false;
@@ -61,12 +61,21 @@ export function mountAct(css: string): void {
   });
 }
 
-export function isAskFirst(): boolean {
-  return askFirst;
+/** Current confirmation autonomy for act-mode actions. */
+export function autonomyMode(): ConfirmMode {
+  return autonomy;
 }
 
-export function setAskFirst(value: boolean): void {
-  askFirst = value;
+export function setAutonomy(value: ConfirmMode): void {
+  autonomy = value;
+  persistActUi();
+  updateBanner();
+}
+
+/** normal (destructive) -> ask first -> auto (never) -> normal ... */
+export function cycleAutonomy(): void {
+  autonomy =
+    autonomy === 'destructive' ? 'always' : autonomy === 'always' ? 'never' : 'destructive';
   persistActUi();
   updateBanner();
 }
@@ -858,17 +867,23 @@ function refreshTable(): void {
   tableDirty = false;
 }
 
+const AUTONOMY_LABEL: Record<ConfirmMode, string> = {
+  always: 'ASK FIRST',
+  destructive: 'normal',
+  never: 'AUTO (no confirms)',
+};
+
 function updateBanner(): void {
   if (!spotlight || !active) return;
   spotlight.setBanner(
-    `Act — click to pin · Esc to exit · Ask first: ${askFirst ? 'ON' : 'OFF'}`,
-    () => setAskFirst(!askFirst),
+    `Act — click to pin · Esc to exit · Autonomy: ${AUTONOMY_LABEL[autonomy]} (click to change)`,
+    () => cycleAutonomy(),
   );
 }
 
 function persistActUi(): void {
   try {
-    window.sessionStorage.setItem(ACT_UI_KEY, JSON.stringify({ askFirst }));
+    window.sessionStorage.setItem(ACT_UI_KEY, JSON.stringify({ autonomy }));
   } catch {
     return;
   }
@@ -878,8 +893,12 @@ function loadActUi(): void {
   try {
     const raw = window.sessionStorage.getItem(ACT_UI_KEY);
     if (!raw) return;
-    const parsed = JSON.parse(raw) as { askFirst?: unknown };
-    askFirst = parsed.askFirst === true;
+    const parsed = JSON.parse(raw) as { autonomy?: unknown; askFirst?: unknown };
+    if (parsed.autonomy === 'always' || parsed.autonomy === 'never' || parsed.autonomy === 'destructive') {
+      autonomy = parsed.autonomy;
+    } else if (parsed.askFirst === true) {
+      autonomy = 'always';
+    }
   } catch {
     return;
   }

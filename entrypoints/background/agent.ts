@@ -24,7 +24,7 @@ const OBSERVE_TIMEOUT_MS = 15_000;
 
 interface AgentState {
   goal: string;
-  askFirst: boolean;
+  confirmMode: ConfirmMode;
   step: number;
   status: 'idle' | 'running' | 'paused' | 'finished';
   narration: string[];
@@ -89,14 +89,14 @@ export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
   await resumeAgentIfStale(tabId);
   const state = await loadState(tabId);
   if (!state) {
-    return { status: 'idle', step: 0, goal: '', askFirst: false, narration: [] };
+    return { status: 'idle', step: 0, goal: '', confirmMode: 'destructive', narration: [] };
   }
   const running = state.status === 'running' && activeRuns.has(tabId);
   return {
     status: running ? 'running' : state.status === 'running' ? 'finished' : state.status,
     step: state.step,
     goal: state.goal,
-    askFirst: state.askFirst,
+    confirmMode: state.confirmMode,
     narration: state.narration,
     pauseQuestion: state.pauseQuestion,
   };
@@ -105,21 +105,25 @@ export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
 export async function toggleAgentDebug(tabId: number): Promise<boolean> {
   const state =
     (await loadState(tabId)) ??
-    { goal: '', askFirst: false, step: 0, status: 'idle' as const, narration: [] };
+    { goal: '', confirmMode: 'destructive' as const, step: 0, status: 'idle' as const, narration: [] };
   state.debug = !(state.debug === true);
   await saveState(tabId, state);
   return state.debug;
 }
 
-export async function startAgent(tabId: number, goal: string, askFirst: boolean): Promise<void> {
+export async function startAgent(
+  tabId: number,
+  goal: string,
+  mode: ConfirmMode,
+): Promise<void> {
   if (activeRuns.has(tabId)) {
     notify(tabId, { type: 'agent.error', message: 'Agent is already running.' });
     return;
   }
-  console.info(`[agent] start tab=${tabId} goal="${goal}" askFirst=${askFirst}`);
+  console.info(`[agent] start tab=${tabId} goal="${goal}" confirmMode=${mode}`);
   const state: AgentState = {
     goal,
-    askFirst,
+    confirmMode: mode,
     step: 0,
     status: 'running',
     narration: [],
@@ -340,7 +344,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       const executable = nonDone.filter((action) => action.op !== 'look');
       const overflow = executable.length > MAX_OPS_PER_STEP ? executable.splice(MAX_OPS_PER_STEP) : [];
       const observations = executable.length
-        ? await executeOnContent(tabId, executable, confirmMode(state.askFirst), run)
+        ? await executeOnContent(tabId, executable, state.confirmMode, run)
         : [];
       if (overflow.length) {
         observations.push({
@@ -563,10 +567,6 @@ async function synthesizeAnswer(state: AgentState): Promise<string> {
     totalTimeoutMs: settings.llmTotalTimeoutMs,
     extraBody: effortExtraBody(settings, state.nextEffort),
   });
-}
-
-function confirmMode(askFirst: boolean): ConfirmMode {
-  return askFirst ? 'always' : 'destructive';
 }
 
 async function observeWithRetry(

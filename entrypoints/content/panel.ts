@@ -6,7 +6,7 @@ import type { AgentSummary } from '@/shared/protocol';
 import { chatPost, ensureChatPort, onChatMessage } from './chat-client';
 import { collectPageContext } from './dom-context';
 import { renderMarkdown } from './markdown';
-import { isActMode, isAskFirst, onActModeChange, setActMode, setAskFirst, executeActions } from './act/act';
+import { isActMode, autonomyMode, onActModeChange, setActMode, setAutonomy, executeActions } from './act/act';
 import { COMMAND_HELP, parseCommand } from './act/commands';
 
 const HOST_ID = 'browser-agent-root';
@@ -372,7 +372,7 @@ export function mountUi(css: string): void {
     const commandOps = parseCommand(text);
     if (commandOps) {
       addUserMessage(text);
-      const observations = await executeActions(commandOps);
+      const observations = await executeActions(commandOps, autonomyMode());
       for (const observation of observations) {
         const label = `${observation.op}${observation.target != null ? ` [${observation.target}]` : ''}`;
         addNote(
@@ -402,7 +402,7 @@ export function mountUi(css: string): void {
       addNote(`Agent goal: ${text}`);
       handles.input.value = '';
       autosize();
-      chatPost({ type: 'agent.start', goal: text, askFirst: isAskFirst() });
+      chatPost({ type: 'agent.start', goal: text, confirmMode: autonomyMode() });
       return;
     }
 
@@ -583,7 +583,7 @@ export function mountUi(css: string): void {
       if (!handles) return;
       if (state.status === 'running') {
         agentRunning = true;
-        setAskFirst(state.askFirst);
+        setAutonomy(state.confirmMode);
         updateComposerState();
         addNote(`Agent running: "${state.goal}" (step ${state.step})`);
         for (const line of state.narration.slice(-10)) addNote(line);
@@ -593,7 +593,7 @@ export function mountUi(css: string): void {
         window.setTimeout(() => void catchUpAfterRestore(), 2500);
       } else if (state.status === 'paused') {
         agentPaused = true;
-        setAskFirst(state.askFirst);
+        setAutonomy(state.confirmMode);
         addNote(
           state.pauseQuestion
             ? `Agent paused: ${state.pauseQuestion} - send a message to continue.`

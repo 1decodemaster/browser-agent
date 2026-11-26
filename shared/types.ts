@@ -66,7 +66,7 @@ export type ChatPortMessage =
   | { type: 'chat.done'; requestId: string; text: string; stopped?: boolean }
   | { type: 'chat.error'; requestId: string; message: string }
   | { type: 'chat.answer'; text: string }
-  | { type: 'agent.start'; goal: string; askFirst: boolean }
+  | { type: 'agent.start'; goal: string; confirmMode: ConfirmMode }
   | { type: 'agent.stop' }
   | { type: 'agent.resume'; text: string }
   | { type: 'agent.paused'; reason: 'blocked' | 'steplimit'; question: string }

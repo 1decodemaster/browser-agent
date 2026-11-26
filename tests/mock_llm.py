@@ -32,6 +32,8 @@ Behaviors are selected via the model name in the request:
                         done once an image is attached to the prompt.
   wikihop             - A4 multi-page: home -> France -> Paris link hops, done
                         on the third page with the extracted answer.
+  autosubmit          - fills Destination with type+submit (the flow the
+                        destructive gate normally blocks), then done.
 
 Speech: voice "slow-<seconds>" delays each speech response by <seconds>
         (pipelining/first-word probes). Records carry received_t (request
@@ -468,6 +470,26 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     actions = [{'op': 'wait', 'ms': 200}]
                     thought = 'lost, wait'
+                return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'autosubmit':
+            if is_agent_step(prompt):
+                entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
+                entries = [(int(eid), role, name) for eid, role, name in entries]
+                dest_set = any('Remove destination' in n for _, _, n in entries)
+                dest = next((eid for eid, role, n in entries
+                             if role in ('combobox', 'textbox', 'searchbox') and 'Destination' in n), None)
+                if dest is not None and not dest_set:
+                    # same batch t13 gates in destructive mode
+                    actions = [
+                        {'op': 'type', 'target': dest, 'text': 'SFO'},
+                        {'op': 'wait', 'ms': 400},
+                        {'op': 'type', 'target': dest, 'text': 'SFO', 'submit': True},
+                    ]
+                    thought = 'open suggestions then submit (destructive gate normally fires)'
+                else:
+                    actions = [{'op': 'done', 'summary': 'AUTOSUBMIT COMPLETE'}]
+                    thought = 'destination committed'
                 return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'
             return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
         if is_agent_step(prompt):

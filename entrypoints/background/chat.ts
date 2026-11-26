@@ -50,7 +50,7 @@ export function watchChatPorts(): void {
       } else if (message.type === 'chat.stop') {
         controllers.get(message.requestId)?.abort();
       } else if (message.type === 'agent.start') {
-        void startAgent(tabId, message.goal, message.askFirst);
+        void startAgent(tabId, message.goal, message.confirmMode);
       } else if (message.type === 'agent.resume') {
         void resumeAgent(tabId, message.text);
       } else if (message.type === 'agent.stop') {

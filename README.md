@@ -109,9 +109,11 @@ product with the one in my screenshot".
 
 Click **Act** in the panel header — the page gets indexed and element numbers appear on hover.
 Anything you send becomes an **agent goal** that the model pursues autonomously ("find the
-cheapest direct flight on March 3 and open it"). The **Ask-first** toggle in the on-page banner
-controls confirmations: ON confirms every click/fill; OFF confirms only high-risk actions
-(delete, pay, checkout, sign out, …). Send turns into a red **Stop** while a run is active.
+cheapest direct flight on March 3 and open it"). The **Autonomy** button in the on-page banner
+cycles confirmations: **normal** confirms only high-risk actions (delete, pay, checkout, sign
+out, send, submit, …); **ASK FIRST** confirms every click/fill; **AUTO (no confirms)** skips all
+confirmations — the agent fills and submits freely, so use it only on pages you trust. Send turns
+into a red **Stop** while a run is active.
 
 ### Local commands
 

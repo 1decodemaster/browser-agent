@@ -36,7 +36,7 @@ export interface AgentSummary {
   status: 'idle' | 'running' | 'paused' | 'finished';
   step: number;
   goal: string;
-  askFirst: boolean;
+  confirmMode: ConfirmMode;
   narration: string[];
   pauseQuestion?: string;
 }
