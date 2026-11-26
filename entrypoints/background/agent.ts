@@ -12,22 +12,27 @@ import type {
   ObserveResult,
   ScrollTarget,
 } from '@/shared/protocol';
-import type { ChatPortMessage, Settings } from '@/shared/types';
+import type { ChatMessage, ChatPortMessage, Settings } from '@/shared/types';
 import { getTabPort } from './chat';
 
 const agentKey = (tabId: number) => `session:agent:${tabId}` as const;
 const MAX_STEPS = 12;
+const MAX_OPS_PER_STEP = 8;
+const IDLE_STEP_TOLERANCE = 2;
 const OBSERVE_TIMEOUT_MS = 15_000;
 
 interface AgentState {
   goal: string;
   askFirst: boolean;
   step: number;
-  status: 'idle' | 'running' | 'finished';
+  status: 'idle' | 'running' | 'paused' | 'finished';
   narration: string[];
   debug?: boolean;
   memory?: string;
   nextEffort?: AgentEffort;
+  maxSteps?: number;
+  pausedReason?: 'blocked' | 'steplimit';
+  pauseQuestion?: string;
 }
 
 type AgentEffort = 'low' | 'medium' | 'high' | 'off' | 'default';
@@ -44,16 +49,17 @@ const activeRuns = new Map<number, RunHandle>();
 const AGENT_SYSTEM_LINES = [
   'You are Browser Agent, an autonomous assistant operating the user\'s web page through a numbered element index.',
   'Respond ONLY with a single JSON object, no prose:',
-  '{"v":1,"thought":"short reasoning","actions":[...]}',
+  '{"v":1,"thought":"short reasoning","status":"continue|done|blocked","summary":"...","actions":[...]}',
   'Ops: {"op":"click","target":N} | {"op":"type","target":N,"text":"...","submit":true?} | {"op":"key","target":N,"key":"Enter"|"ArrowDown"|"Escape"} | {"op":"select","target":N,"value":"..."} (native <select>; value is matched against option text or value) | {"op":"find","text":"..."} (search the whole page for an element by name/text and get its id - use it when the element you need is not in the index instead of scrolling blindly) | {"op":"inspect","target":N} (full detail on one element: text, position, surrounding text, nearby controls) | {"op":"focus","target":N} | {"op":"scroll","to":"top"|"bottom"|"up"|"down"} | {"op":"scroll","target":N} | {"op":"extract","target":N} | {"op":"extract"} (no target: returns the page\'s main readable text) | {"op":"navigate","url":"..."} | {"op":"wait","ms":N} | {"op":"done","summary":"..."}',
   'Before setting a value, check whether the index already shows the desired state (e.g. a button or chip already labeled with the target date, city, or passenger count) - if it does, act on that element instead of re-entering the value.',
   'Index lines carry live state: = "..." is a field\'s current value or a select\'s selected option (selects also list their options after "opts:"), and [checked] / [disabled] / [expanded] are flags - read the state instead of guessing, and extract on a field re-reads its value / checked state.',
-  'Rules: 1-3 actions per step. "navigate" must be the LAST action of a step - the next step observes the new page, so never batch extract/wait/click after it. On article pages, use extract with no target to read the main text before answering. Use select on native <select> dropdowns - clicking one only opens the OS dropdown. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. find "text" returns matching elements with their ids (found elements stay in later indexes) - run find in one step, then act on the id in the next step. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside. Call done with the answer in summary when the goal is achieved.',
+  'Status: "continue" while you are working. When the goal is achieved set "done" and put the user-facing answer in summary (the done op also works). When you cannot proceed without the user - missing info, an ambiguous choice, a login you lack - set "blocked" and put the exact question for the user in summary; the run pauses and the user\'s next message resumes it with your question answered. Every step should act: an empty actions array with status "continue" wastes a step, and two idle steps in a row abort the run.',
+  'Rules: up to 8 actions per step; navigation, form submission, and any action that opens a menu/dropdown must be the LAST action of the step - the page changes under the actions after them. "navigate" must be the LAST action of a step - the next step observes the new page, so never batch extract/wait/click after it. On article pages, use extract with no target to read the main text before answering. Use select on native <select> dropdowns - clicking one only opens the OS dropdown. For autocomplete fields: type without submit, wait, then click the matching option row (or press key Enter). New dropdown/popover options opened by your last action are listed first under "Recently appeared" - look there for suggestion rows. find "text" returns matching elements with their ids (found elements stay in later indexes) - run find in one step, then act on the id in the next step. Submit only to run the final search. Targets must exist in the provided index. Click targets must be interactive (link/button/textbox/combobox); content roles like paragraph/listitem/heading are for extract - clicking them falls back to the nearest clickable inside.',
 ];
 
-const SCHEMA_V1 = '{"v":1,"thought":"short reasoning","actions":[...]}';
+const SCHEMA_V1 = '{"v":1,"thought":"short reasoning","status":"continue|done|blocked","summary":"answer (done) or question (blocked), else omit","actions":[...]}';
 const SCHEMA_V2 =
-  '{"v":2,"thought":"short reasoning","memory":"updated working notes","effort":"low|medium|high|off|default","actions":[...]}';
+  '{"v":2,"thought":"short reasoning","status":"continue|done|blocked","summary":"answer (done) or question (blocked), else omit","memory":"updated working notes","effort":"low|medium|high|off|default","actions":[...]}';
 const MEMORY_RULES = [
   'memory: rewrite your working notes each step - what the goal needs, how this page is structured, what you already tried and what failed, and the plan for the next steps. Update, prune, never append endlessly; keep it under 600 characters. Omit the field to keep your previous notes unchanged.',
   'effort: the reasoning effort for your NEXT step. "low" for single mechanical actions you are sure about (click a visible button, fill one field), "medium" for a normal step, "high" only when the page contradicted your plan and you need to rethink, "off" only for a single trivial action you are fully confident about, "default" to keep the configured effort.',
@@ -84,6 +90,7 @@ export async function getAgentSummary(tabId: number): Promise<AgentSummary> {
     goal: state.goal,
     askFirst: state.askFirst,
     narration: state.narration,
+    pauseQuestion: state.pauseQuestion,
   };
 }
 
@@ -128,6 +135,44 @@ export function stopAgent(tabId: number): void {
   void markFinishedIfStale(tabId);
 }
 
+/** Continues a paused run; the message extends the task (union of the messages). */
+export async function resumeAgent(tabId: number, text: string): Promise<void> {
+  if (activeRuns.has(tabId)) {
+    notify(tabId, { type: 'agent.error', message: 'Agent is already running.' });
+    return;
+  }
+  const state = await loadState(tabId);
+  if (!state || state.status !== 'paused') {
+    notify(tabId, { type: 'agent.error', message: 'No paused agent run to resume.' });
+    return;
+  }
+  const message = text.trim();
+  console.info(`[agent] resume tab=${tabId} reason=${state.pausedReason} text="${message}"`);
+  const bareContinue = /^continue\.?$/i.test(message);
+  if (message && !(state.pausedReason === 'steplimit' && bareContinue)) {
+    state.goal = `${state.goal}\nFollow-up from the user: ${message}`;
+  }
+  if (message) {
+    const history = await getHistory(tabId);
+    history.push({ role: 'user', text: message });
+    await saveHistory(tabId, history);
+  }
+  if (state.pausedReason === 'steplimit') {
+    state.maxSteps = (state.maxSteps ?? MAX_STEPS) + MAX_STEPS;
+    state.step = 0;
+  }
+  state.pausedReason = undefined;
+  state.pauseQuestion = undefined;
+  state.status = 'running';
+  state.narration.push(message ? `Resumed by user: "${message}"` : 'Resumed by user.');
+  await saveState(tabId, state);
+  const run: RunHandle = { stop: false, abort: new AbortController() };
+  activeRuns.set(tabId, run);
+  void runLoop(tabId, run)
+    .catch(() => {})
+    .finally(() => activeRuns.delete(tabId));
+}
+
 async function markFinishedIfStale(tabId: number): Promise<void> {
   if (activeRuns.has(tabId)) return;
   const state = await loadState(tabId);
@@ -168,11 +213,14 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
+  let pausedReason: 'blocked' | 'steplimit' | undefined;
+  let pauseQuestion = '';
+  let idleStreak = 0;
   let lastUrl = '';
   let lastPrimaryTarget: number | null = null;
   let repeatCount = 0;
   try {
-    while (state.step < MAX_STEPS) {
+    while (state.step < (state.maxSteps ?? MAX_STEPS)) {
       if (run.stop) {
         summary = 'Stopped by user.';
         break;
@@ -194,10 +242,18 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         repeatCount >= 2 && lastPrimaryTarget != null
           ? `WARNING: clicking [${lastPrimaryTarget}] ${repeatCount + 1} times in a row has not changed the page (still on ${lastUrl}). Choose a DIFFERENT element or a different strategy.`
           : null;
+      const idleWarning =
+        idleStreak > 0
+          ? `WARNING: your last step returned no actions (${idleStreak} idle step${idleStreak > 1 ? 's' : ''} in a row). Act on the page now, or set status "done"/"blocked" - one more idle step aborts the run.`
+          : null;
+      const guidance = [stuckWarning, idleWarning].filter(Boolean).join('\n') || null;
+      const stepHistory = await getHistory(tabId);
 
       let parsed: {
         thought: string;
         actions: ActionOp[];
+        status: 'continue' | 'done' | 'blocked';
+        summary?: string;
         memory?: string;
         effort?: string;
       } | null = null;
@@ -211,9 +267,9 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           ? prevTimedOut
             ? 'Your previous attempt timed out before producing a reply. Reply with ONLY the JSON object.'
             : `Your previous reply was invalid: ${lastError}. Reply with ONLY the JSON object.`
-          : stuckWarning;
+          : guidance;
         try {
-          raw = await completeOnce(state, observation, run.abort.signal, feedback);
+          raw = await completeOnce(tabId, state, observation, stepHistory, run.abort.signal, feedback);
         } catch (callError) {
           if (isLlmTimeout(callError)) {
             timedOut = true;
@@ -269,13 +325,21 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         (action): action is { op: 'done'; summary?: string } => action.op === 'done',
       );
       const executable = parsed.actions.filter((action) => action.op !== 'done');
+      const overflow = executable.length > MAX_OPS_PER_STEP ? executable.splice(MAX_OPS_PER_STEP) : [];
       const observations = executable.length
         ? await executeOnContent(tabId, executable, confirmMode(state.askFirst), run)
         : [];
+      if (overflow.length) {
+        observations.push({
+          ok: false,
+          op: 'batch',
+          message: `dropped ${overflow.length} action(s) beyond the ${MAX_OPS_PER_STEP}-per-step cap (${overflow.map((action) => action.op).join(', ')}) - keep navigation/submission last`,
+        });
+      }
       console.info(`[agent] tab=${tabId} executed=${observations.length}`);
 
       const stepLines = [
-        `Step ${state.step}: ${parsed.thought || '(no thought)'}`,
+        `Step ${state.step}: ${parsed.thought || '(no thought)'}${parsed.status === 'continue' ? '' : ` [${parsed.status}]`}`,
         ...observations.map(formatObservation),
       ];
       state.narration.push(...stepLines);
@@ -293,13 +357,23 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
         summary = 'Stopped by user.';
         break;
       }
-      if (doneAction) {
-        summary = doneAction.summary || 'Goal marked done.';
+      if (doneAction || parsed.status === 'done') {
+        summary = doneAction?.summary?.trim() || parsed.summary?.trim() || 'Goal marked done.';
+        break;
+      }
+      if (parsed.status === 'blocked') {
+        pausedReason = 'blocked';
+        pauseQuestion = parsed.summary?.trim() || parsed.thought.trim() || 'I cannot proceed without input from you.';
         break;
       }
       if (!executable.length) {
-        error = 'Model returned no executable actions.';
-        break;
+        idleStreak++;
+        if (idleStreak > IDLE_STEP_TOLERANCE) {
+          error = `Model returned no actions ${idleStreak} steps in a row - run aborted.`;
+          break;
+        }
+      } else {
+        idleStreak = 0;
       }
 
       const primary = executable[0];
@@ -317,28 +391,46 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
 
       await delay(observations.some((entry) => entry.navigating) ? 800 : 400);
     }
-    if (!summary && !error && state.step >= MAX_STEPS) {
-      summary = `Reached the step limit (${MAX_STEPS}).`;
+    if (!summary && !error && !pausedReason && state.step >= (state.maxSteps ?? MAX_STEPS)) {
+      pausedReason = 'steplimit';
+      pauseQuestion = `I used all ${state.maxSteps ?? MAX_STEPS} steps without reaching the goal - reply "continue" and I will pick up where I left off.`;
     }
   } catch (loopError) {
     if (run.stop || isAbortError(loopError)) summary = 'Stopped by user.';
     else error = loopError instanceof Error ? loopError.message : String(loopError);
   } finally {
     releaseKeepalive();
-    state.status = 'finished';
-    if (error) {
-      state.narration.push(`Error: ${error}`);
-      console.warn(`[agent] tab=${tabId} error: ${error}`);
+    if (pausedReason && !run.stop && !error) {
+      state.status = 'paused';
+      state.pausedReason = pausedReason;
+      state.pauseQuestion = pauseQuestion;
+      state.narration.push(`Paused (${pausedReason}): ${pauseQuestion}`);
+      trimNarration(state);
+      await saveState(tabId, state);
+      console.info(`[agent] tab=${tabId} paused (${pausedReason}): ${pauseQuestion}`);
+      if (pausedReason === 'blocked') {
+        const history = await getHistory(tabId);
+        history.push({ role: 'assistant', text: pauseQuestion });
+        await saveHistory(tabId, history);
+        notify(tabId, { type: 'chat.answer', text: pauseQuestion });
+      }
+      notify(tabId, { type: 'agent.paused', reason: pausedReason, question: pauseQuestion });
     } else {
-      state.narration.push(`Finished: ${summary ?? 'done'}`);
-      console.info(`[agent] tab=${tabId} finished: ${summary ?? 'done'}`);
-    }
-    trimNarration(state);
-    await saveState(tabId, state);
-    if (error) notify(tabId, { type: 'agent.error', message: error });
-    else notify(tabId, { type: 'agent.done', summary });
-    if (!run.stop && state.narration.length > 0) {
-      void deliverAnswer(tabId, state, summary);
+      state.status = 'finished';
+      if (error) {
+        state.narration.push(`Error: ${error}`);
+        console.warn(`[agent] tab=${tabId} error: ${error}`);
+      } else {
+        state.narration.push(`Finished: ${summary ?? 'done'}`);
+        console.info(`[agent] tab=${tabId} finished: ${summary ?? 'done'}`);
+      }
+      trimNarration(state);
+      await saveState(tabId, state);
+      if (error) notify(tabId, { type: 'agent.error', message: error });
+      else notify(tabId, { type: 'agent.done', summary });
+      if (!run.stop && state.narration.length > 0) {
+        void deliverAnswer(tabId, state, summary);
+      }
     }
   }
 }
@@ -491,8 +583,10 @@ async function executeOnContent(
 }
 
 async function completeOnce(
+  tabId: number,
   state: AgentState,
   observation: ObserveResult,
+  history: ChatMessage[],
   signal: AbortSignal,
   feedback: string | null,
 ): Promise<string> {
@@ -513,11 +607,22 @@ async function completeOnce(
       : [];
 
   const transcript = state.narration.slice(-6).join('\n');
+  const conversation = history
+    .slice(-10)
+    .filter((message) => message.text.trim())
+    .map(
+      (message) =>
+        `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text.replace(/\s+/g, ' ').slice(0, 400)}`,
+    )
+    .join('\n');
   const userContent = [
     `Goal: ${state.goal}`,
-    `Step ${state.step} of ${MAX_STEPS}`,
+    `Step ${state.step} of ${state.maxSteps ?? MAX_STEPS}`,
     `Page: ${observation.title} (${observation.url})`,
     ...memorySection,
+    conversation
+      ? `Conversation with the user in this tab (oldest first - resume context, tone, and any answer to a previous blocked question):\n${conversation.length > 3000 ? conversation.slice(-3000) : conversation}`
+      : '',
     '',
     'Element index:',
     observation.index,
@@ -556,6 +661,8 @@ async function completeOnce(
 function parseActionResponse(raw: string): {
   thought: string;
   actions: ActionOp[];
+  status: 'continue' | 'done' | 'blocked';
+  summary?: string;
   memory?: string;
   effort?: string;
 } {
@@ -568,6 +675,8 @@ function parseActionResponse(raw: string): {
   const parsed = JSON.parse(text.slice(start, end + 1)) as {
     thought?: unknown;
     actions?: unknown;
+    status?: unknown;
+    summary?: unknown;
     memory?: unknown;
     effort?: unknown;
   };
@@ -575,10 +684,14 @@ function parseActionResponse(raw: string): {
   const actions = parsed.actions
     .map(coerceAction)
     .filter((action): action is ActionOp => action != null);
-  if (!actions.length) throw new Error('no valid actions');
+  const rawStatus = typeof parsed.status === 'string' ? parsed.status.toLowerCase() : 'continue';
+  const status =
+    rawStatus === 'done' || rawStatus === 'blocked' ? rawStatus : 'continue';
   return {
     thought: typeof parsed.thought === 'string' ? parsed.thought : '',
     actions,
+    status,
+    summary: typeof parsed.summary === 'string' && parsed.summary.trim() ? parsed.summary.trim() : undefined,
     memory: typeof parsed.memory === 'string' ? parsed.memory : undefined,
     effort: typeof parsed.effort === 'string' ? parsed.effort.toLowerCase() : undefined,
   };

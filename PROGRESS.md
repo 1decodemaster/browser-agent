@@ -6,7 +6,34 @@
 
 ## Current status
 
-- **Extension version:** 0.18.0 (**R1 + R2 + R3 done**; **R4 next**).
+- **Extension version:** 0.19.0 (**R1 + R2 + R3 + R4 done**; **R5 deferred**).
+- **v0.19.0 — R4 loop control + conversation**:
+  - **Plan `status` + `summary`**: every plan reply now carries
+    `status: "continue"|"done"|"blocked"` and an optional `summary` (v1 + v2 schemas). `done`
+    ends the run with the summary as the answer (the `done` op still works, either wins).
+    `blocked` PAUSES the run: the question (summary) is pushed into chat history as an
+    assistant message + `chat.answer`, state persists as `paused`
+    (`pausedReason: blocked|steplimit`, `pauseQuestion` in `AgentSummary`), and the panel
+    flips to reply-to-continue. `parseActionResponse` accepts an EMPTY actions array now
+    (idle/blocked/status-only replies), status defaults to continue, unknown values → continue.
+  - **Resume = union**: while paused, the panel routes the next message to `agent.resume`;
+    `resumeAgent` appends it to the goal (`Follow-up from the user: …` — a bare "continue"
+    after a step-cap pause does not pollute the goal), persists it to chat history, and
+    re-spawns `runLoop`. Step-cap resumes reset `step` and extend the budget
+    (`maxSteps += 12`); blocked resumes keep it.
+  - **Step cap pauses instead of terminating**: hitting the step limit sets
+    `pausedReason: steplimit` with a "reply continue" question instead of ending the run.
+  - **Idle tolerance**: up to 2 consecutive no-action steps are tolerated (with a WARNING
+    feedback line into the next plan); the 3rd consecutive idle step aborts.
+  - **≤8 ops per step**: prompt rule raised from 1-3 to ≤8 with
+    navigation/submission/menu-open LAST; the loop enforces the cap (overflow dropped with a
+    `batch → failed — dropped N action(s)…` observation).
+  - **Conversation feed**: `completeOnce` embeds the tab's last ~10 chat messages
+    (User:/Assistant: lines, 400 chars each, 3k cap) — the agent sees its chat context,
+    including its own blocked questions.
+  - Panel: `agent.paused` route + paused branch in `restoreAgentState` (survives reload),
+    reply-to-continue composer path. Mock models `r4blocked/r4idle/r4stall/r4slow/r4done/r4cap`;
+    records now carry `has_conversation`. **T16** 17 checks. Suite 139/139.
 - **v0.18.0 — R3 reasoning ops (select / find / inspect / focus)**:
   - **`select {target, value}`**: native `<select>` set through the prototype value setter +
     input/change events (framework listeners see the pick; synthetic clicks only open the OS
@@ -464,7 +491,7 @@
   - `inspect {target}`: text/state, ordinal position among same-kind siblings, the text immediately
     before/after, ancestors' text, and the controls in the same container.
   - `focus`. Every op added in three places: protocol.ts, KNOWN_OPS + prompt doc line, runAction.
-- [ ] **R4 — Loop control + conversation**
+- [x] **R4 — Loop control + conversation** (v0.19.0 — done as described in Current status)
   - Plan schema gains `status: continue|done|blocked` + `summary`; `blocked` pauses the run and
     surfaces the question; the user's next message resumes it (task = union of the messages).
   - Step cap pauses with "continue" instead of terminating; tolerate two idle steps (no ops,
@@ -478,6 +505,12 @@ post-submit readback, batch stop-and-report on navigation.
 
 ## Decisions log
 
+- R4 (v0.19.0): resume is panel-driven — a paused run hijacks the composer (the next message
+  goes to `agent.resume`, never to plain chat), so a stale panel can't accidentally send a chat
+  turn to a paused agent. A blocked question is persisted to chat history as an assistant
+  message before the pause notification (survives reload + feeds later plan prompts); the
+  step-cap prompt is a note only. A step-cap resume grants a fresh 12-step budget and a bare
+  "continue" is treated as pure continuation, not a goal amendment.
 - R1 (v0.16.0) reverses the v0.8.2 decision "`submit:true` no longer forces a prompt": per the
   reference design, destructive/Auto mode confirms any type+submit and any name matching
   submit/send. Auto mode keeps the submission rail; read-only ops never ask.

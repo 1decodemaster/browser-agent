@@ -90,6 +90,7 @@ let activeRequestId: string | null = null;
 let pendingAssistant: { bubble: HTMLElement; text: string } | null = null;
 let pendingReasoning: { bubble: HTMLElement; text: string } | null = null;
 let agentRunning = false;
+let agentPaused = false;
 let renderedMessageCount = 0;
 let snapped = false;
 let snapWidth = 380;
@@ -383,6 +384,18 @@ export function mountUi(css: string): void {
       return;
     }
 
+    if (agentPaused) {
+      agentPaused = false;
+      agentRunning = true;
+      updateComposerState();
+      handles.input.value = '';
+      autosize();
+      if (text) addUserMessage(text);
+      addNote('Resuming agent...');
+      chatPost({ type: 'agent.resume', text: text || 'continue' });
+      return;
+    }
+
     if (isActMode()) {
       agentRunning = true;
       updateComposerState();
@@ -483,12 +496,25 @@ export function mountUi(css: string): void {
       }
       case 'agent.done': {
         agentRunning = false;
+        agentPaused = false;
         updateComposerState();
         addNote(`Agent finished${message.summary ? `: ${message.summary}` : ''}.`);
         break;
       }
+      case 'agent.paused': {
+        agentRunning = false;
+        agentPaused = true;
+        updateComposerState();
+        if (message.reason === 'blocked') {
+          addNote('Agent paused - send a message to answer and continue.');
+        } else {
+          addNote(`${message.question} (reply "continue" to keep going.)`);
+        }
+        break;
+      }
       case 'agent.error': {
         agentRunning = false;
+        agentPaused = false;
         updateComposerState();
         addNote(`Agent error: ${message.message}`);
         break;
@@ -565,6 +591,14 @@ export function mountUi(css: string): void {
         // navigation (no port yet), catch up once: render the finish and any
         // answer that was saved after this panel loaded its history.
         window.setTimeout(() => void catchUpAfterRestore(), 2500);
+      } else if (state.status === 'paused') {
+        agentPaused = true;
+        setAskFirst(state.askFirst);
+        addNote(
+          state.pauseQuestion
+            ? `Agent paused: ${state.pauseQuestion} - send a message to continue.`
+            : `Agent paused on "${state.goal}" - send a message to continue.`,
+        );
       } else if (state.status === 'finished' && state.goal) {
         addNote(
           `Last agent run: "${state.goal}" (step ${state.step}) — type "agent log" to replay.`,

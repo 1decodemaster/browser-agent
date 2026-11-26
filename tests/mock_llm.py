@@ -19,6 +19,15 @@ Behaviors are selected via the model name in the request:
                         focus the Departure time field, then done.
   r3find              - R3 ops: find the non-indexed baggage-hint text, then
                         inspect the discovered id from the narration, then done.
+  r4blocked           - R4 loop control: step 1 returns status blocked + a date
+                        question; after a Follow-up in the goal, waits then
+                        finishes via status done.
+  r4idle              - two idle steps (empty actions, status continue) then
+                        status done (idle-tolerance probe).
+  r4stall             - always idle (abort on the third consecutive idle step).
+  r4slow              - never finishes (wait ops) - step-cap pause probe.
+  r4done              - finishes immediately via plan status done.
+  r4cap               - 11 ops in one step (per-step cap probe), then done.
 
 Speech: voice "slow-<seconds>" delays each speech response by <seconds>
         (pipelining/first-word probes). Records carry received_t (request
@@ -226,6 +235,7 @@ class Handler(BaseHTTPRequestHandler):
             'reasoning_effort': payload.get('reasoning_effort'),
             'enable_thinking': (payload.get('chat_template_kwargs') or {}).get('enable_thinking'),
             'has_memory_section': 'Working notes' in prompt,
+            'has_conversation': 'Conversation with the user' in prompt,
             'memory_head': received_memory(prompt)[:12],
             'kind': kind,
         })
@@ -325,6 +335,78 @@ class Handler(BaseHTTPRequestHandler):
                 return json.dumps({
                     'v': 1,
                     'thought': 'press Enter in Origin (key op smoke test)',
+                    'actions': actions,
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4blocked':
+            if is_agent_step(prompt):
+                steps = sum(1 for r in RECORDS.get(model, []) if r.get('step'))
+                if 'Follow-up' in prompt:
+                    if steps >= 2:
+                        return json.dumps({
+                            'v': 1,
+                            'thought': 'answered, finish',
+                            'status': 'done',
+                            'summary': 'R4BLOCKED COMPLETE',
+                            'actions': [],
+                        }), 'json'
+                    return json.dumps({
+                        'v': 1,
+                        'thought': 'act on the answer',
+                        'status': 'continue',
+                        'actions': [{'op': 'wait', 'ms': 100}],
+                    }), 'json'
+                return json.dumps({
+                    'v': 1,
+                    'thought': 'need the date before searching',
+                    'status': 'blocked',
+                    'summary': 'Which date should I search - Dec 24 or Dec 25?',
+                    'actions': [],
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4idle':
+            if is_agent_step(prompt):
+                steps = sum(1 for r in RECORDS.get(model, []) if r.get('step'))
+                if steps >= 2:
+                    return json.dumps({
+                        'v': 1, 'thought': 'done at last', 'status': 'done',
+                        'summary': 'R4IDLE DONE', 'actions': [],
+                    }), 'json'
+                return json.dumps({
+                    'v': 1, 'thought': 'doing nothing yet', 'status': 'continue', 'actions': [],
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4stall':
+            if is_agent_step(prompt):
+                return json.dumps({
+                    'v': 1, 'thought': 'frozen', 'status': 'continue', 'actions': [],
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4slow':
+            if is_agent_step(prompt):
+                return json.dumps({
+                    'v': 1, 'thought': 'keep grinding', 'status': 'continue',
+                    'actions': [{'op': 'wait', 'ms': 10}],
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4done':
+            if is_agent_step(prompt):
+                return json.dumps({
+                    'v': 1, 'thought': 'wrapped up', 'status': 'done',
+                    'summary': 'R4CAP DONE', 'actions': [],
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
+        if model == 'r4cap':
+            if is_agent_step(prompt):
+                steps = sum(1 for r in RECORDS.get(model, []) if r.get('step'))
+                if steps >= 1:
+                    return json.dumps({
+                        'v': 1, 'thought': 'wrapped up', 'status': 'done',
+                        'summary': 'R4CAP COMPLETE', 'actions': [],
+                    }), 'json'
+                actions = [{'op': 'wait', 'ms': 20} for _ in range(11)]
+                return json.dumps({
+                    'v': 1, 'thought': 'too many ops in one step', 'status': 'continue',
                     'actions': actions,
                 }), 'json'
             return json.dumps({'answer': PLAIN_ANSWER}), 'plain'

@@ -3,7 +3,7 @@ import type { ChatMessage, ChatPortMessage } from '@/shared/types';
 import { getSettings } from '@/shared/settings';
 import { streamChat, isLlmTimeout, type ApiContentPart, type ApiMessage } from './llm';
 import { acquireKeepalive, releaseKeepalive } from './keepalive';
-import { removeAgentState, resumeAgentIfStale, startAgent, stopAgent } from './agent';
+import { removeAgentState, resumeAgent, resumeAgentIfStale, startAgent, stopAgent } from './agent';
 import { normalizeEndpoint } from '@/shared/endpoint';
 
 type Port = ReturnType<typeof browser.runtime.connect>;
@@ -51,6 +51,8 @@ export function watchChatPorts(): void {
         controllers.get(message.requestId)?.abort();
       } else if (message.type === 'agent.start') {
         void startAgent(tabId, message.goal, message.askFirst);
+      } else if (message.type === 'agent.resume') {
+        void resumeAgent(tabId, message.text);
       } else if (message.type === 'agent.stop') {
         void stopAgent(tabId);
       }

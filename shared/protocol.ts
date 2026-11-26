@@ -32,9 +32,10 @@ export interface ObserveResult {
 }
 
 export interface AgentSummary {
-  status: 'idle' | 'running' | 'finished';
+  status: 'idle' | 'running' | 'paused' | 'finished';
   step: number;
   goal: string;
   askFirst: boolean;
   narration: string[];
+  pauseQuestion?: string;
 }

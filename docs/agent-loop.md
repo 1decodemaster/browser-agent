@@ -1,6 +1,6 @@
 # Agent loop — how a run works
 
-> Reference for `v0.18.x`. Generated from the fix-branch code; line numbers drift, function
+> Reference for `v0.19.x`. Generated from the fix-branch code; line numbers drift, function
 > names are stable. The loop lives in `entrypoints/background/agent.ts`; the page side in
 > `entrypoints/content/act/`.
 
@@ -32,7 +32,8 @@ You (panel)                 Background SW (agent.ts)              Page (content 
       │                              │   │                                │   batch stops on nav
     │                              │   │ 4. NARRATE + PUSH              │
     │  ◄── agent.step (port) ───────┤ notify (tabPorts)                  │
-    │                              │   repeat until done / limit / stop │
+    │                              │   repeat: done/stop end,            │
+    │                              │   blocked/step-cap pause            │
     │  ◄── chat.answer (port) ──────┤ deliverAnswer ──► synthesizeAnswer │
 ```
 
@@ -56,8 +57,11 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    `[checked]`, `[disabled]`, `[expanded]` (`serializeTable`).
 
 3. **Think** — `completeOnce` assembles: system prompt (`agentSystem`: base rules; v2 schema +
-   memory/effort rules only when `agentWorkingMemory` is on), goal, step N of 12, page title/URL,
-   working notes, element index, last-6 narration lines, feedback. `effortExtraBody` maps the
+   memory/effort rules only when `agentWorkingMemory` is on), goal, step N of the step budget
+   (`state.maxSteps`, default 12), page title/URL, working notes, the tab's last ~10 chat
+   messages (`Conversation with the user …`, oldest first, so a resumed/blocked run sees its own
+   question and answer), element index, last-6 narration lines, feedback (stuck + idle warnings
+   ride here). `effortExtraBody` maps the
    model's self-chosen `effort` (`low|medium|high|off|default`) to `reasoning_effort` or
    `chat_template_kwargs:{enable_thinking:false}`. `llm.ts` `streamChat` does the streaming POST:
    first-token timeout (default 120s) + total stream cap (default 600s) via one AbortController,
@@ -65,9 +69,9 @@ You (panel)                 Background SW (agent.ts)              Page (content 
 
 4. **Parse** — `parseActionResponse` tolerantly extracts the JSON object (fenced or bare),
    `coerceAction` whitelists ops (`click/type/key/select/find/inspect/focus/scroll/extract/
-   navigate/wait/done`).
-   Invalid replies retry once with feedback; two consecutive timeouts abort the run with a
-   readable error.
+   navigate/wait/done`). The reply also carries a plan-level `status`
+   (`continue`|`done`|`blocked`, default `continue`) and a `summary`. Invalid replies retry once
+   with feedback; two consecutive timeouts abort the run with a readable error.
 
 5. **Act** — `executeOnContent` RPCs `act:execute` → `executeActions` runs ops sequentially
    against the **pinned** table (ids in the prompt == ids at execute time). Confirmation:
@@ -92,23 +96,38 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    (`markDiscovered`, ids persist into later tables) with each non-interactive hit listing the
    interactive controls in its nearest container; `inspect` reports text, ordinal position,
    before/after text, ancestor context, and the controls sharing the container; `focus` focuses
-   a field. Read-only ops never ask for confirmation.
+    a field. Read-only ops never ask for confirmation. ≤8 ops run per step (R4): the prompt
+    makes the model keep navigation/submission/menu-open last, and the loop splices off any
+    overflow with a `batch → failed — dropped N action(s)…` observation.
 
 6. **Narrate + push** — observations are formatted into the narration (trimmed to 40 lines /
    16k chars), pushed over the panel port via `notify` (`agent.step`). A missing port is logged
    (`notification dropped`) instead of failing silently.
 
-7. **Finish** — a `done` op, the step limit, or an error ends the loop. `deliverAnswer`
-   (runs *after* the run slot is released, with its own keepalive): `synthesizeAnswer` sends a
-   trimmed transcript (~6k chars) + working notes with the model's self-chosen effort, saves the
-   answer to chat history, pushes `chat.answer`; on synthesis failure the run's own summary is
-   delivered as the final chat message.
+7. **Finish or pause** — a `done` op / `status:"done"`, an error, or `run.stop` ends the loop;
+   `status:"blocked"` or hitting the step budget *pauses* instead (R4). A blocked pause stores
+   `pausedReason:'blocked'` + `pauseQuestion`, pushes the question into chat history as an
+   assistant message + `chat.answer`, then `agent.paused`; the user's next message arrives as
+   `agent.resume` → `resumeAgent`: the goal grows by the follow-up (`Follow-up from the user: …`),
+   the message is saved to chat history, and the run continues (the plan prompt now sees the
+   whole conversation). A step-limit pause (`pausedReason:'steplimit'`) resumes on "continue"
+   with `step` reset and `maxSteps += 12`; a bare "continue" never touches the goal. Two idle
+   steps (no actions, `status:"continue"`) are tolerated with a WARNING into the next plan, the
+   third aborts. A finished run's `deliverAnswer` (runs *after* the run slot is released, with
+   its own keepalive): `synthesizeAnswer` sends a trimmed transcript (~6k chars) + working notes
+   with the model's self-chosen effort, saves the answer to chat history, pushes `chat.answer`;
+   on synthesis failure the run's own summary is delivered as the final chat message. Paused runs
+   skip answer synthesis — the question *is* the output.
 
 ## Cross-cutting
 
 - **Keepalive** (`background/keepalive.ts`): refcounted 20s ping holds the MV3 service worker
   alive during runs, chat streams, and answer synthesis.
 - **Stop**: `agent.stop` over the port sets `run.stop` + aborts the in-flight LLM call.
+- **Pause/resume** (R4): `agent.paused` over the port (reason `blocked`|`steplimit`) flips the
+  panel into reply-to-continue mode (`agentPaused`; restored from `agent:get` on reload). The
+  next composer message becomes `agent.resume` instead of a chat turn — `resumeAgent` in
+  `agent.ts` continues the stored `AgentState`.
 - **Panel port lifecycle**: connected eagerly at panel mount (`chat-client.ts`
   `ensureChatPort`); if a run finishes while notifications were lost across a navigation, the
   panel's catch-up re-checks the state 2.5s after restore and renders the finish + any answer

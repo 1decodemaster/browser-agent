@@ -239,6 +239,38 @@ class Harness:
         logs = ' | '.join(getattr(self, 'sw_logs', [])[-6:])
         raise TimeoutError(f'agent did not finish: {state}\nSW logs: {logs}')
 
+    def wait_agent_paused(self, timeout=90):
+        deadline = time.time() + timeout
+        state = None
+        while time.time() < deadline:
+            state = self.agent_state()
+            if state and state.get('status') == 'paused':
+                time.sleep(0.5)  # let the paused notification land
+                return self.agent_state()
+            self.drain_confirms()
+            time.sleep(0.3)
+        logs = ' | '.join(getattr(self, 'sw_logs', [])[-6:])
+        raise TimeoutError(f'agent did not pause: {state}\nSW logs: {logs}')
+
+    def wait_agent_resumed(self, goal_fragment=None, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = self.agent_state()
+            if state and state.get('status') in ('running', 'finished'):
+                narration = '\n'.join(state.get('narration', []))
+                goal_ok = goal_fragment is None or goal_fragment in state.get('goal', '')
+                if goal_ok and 'Resumed by user' in narration:
+                    time.sleep(0.2)
+                    return self.agent_state()
+            time.sleep(0.2)
+        raise TimeoutError(f'agent did not resume: {self.agent_state()}')
+
+    def chat_history(self):
+        return self.sw.evaluate(
+            "async (tabId) => (await chrome.storage.session.get('chat:' + tabId))['chat:' + tabId]",
+            self.tab_id,
+        ) or []
+
     # -- panel UI (closed shadow DOM -> coordinate clicks) ---------------
     def enable_act(self):
         vw = self.page.evaluate('window.innerWidth')
@@ -294,6 +326,7 @@ def run_tests():
             t13_destructive_submit_gate(h)
             t14_perception_fidelity(h)
             t15_reasoning_ops(h)
+            t16_loop_control(h)
         finally:
             h.context.close()
 
@@ -1068,6 +1101,118 @@ def t15_reasoning_ops(h):
     check('t15 inspect acted on the found id',
           'inspect' in narration and 'text: Baggage fee' in narration, narration)
     check('t15 find run done summary', 'R3FIND COMPLETE' in narration, narration[-200:])
+    h.disable_act()
+
+
+def t16_loop_control(h):
+    print('\nT16: R4 loop control - blocked pause/resume, idle tolerance, step-cap pause, op cap, conversation feed')
+
+    # --- blocked: the run pauses, the question reaches chat, next message resumes ---
+    h.set_settings(model='r4blocked', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    goal = 'Book a flight for me'
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text(goal)
+    h.wait_agent_started(goal)
+    state = h.wait_agent_paused(timeout=60)
+    check('t16 blocked pauses the run',
+          state.get('status') == 'paused' and state.get('pausedReason') == 'blocked',
+          str({k: state.get(k) for k in ('status', 'pausedReason')}))
+    check('t16 pause question stored', 'Dec 24 or Dec 25' in (state.get('pauseQuestion') or ''),
+          str(state.get('pauseQuestion')))
+    history = h.chat_history()
+    check('t16 question surfaced in chat history',
+          any(m.get('role') == 'assistant' and 'Dec 24 or Dec 25' in m.get('text', '')
+              for m in history), str(history[-2:]))
+    records = json.load(urllib.request.urlopen(
+        MOCK_DEBUG + '/debug/requests?model=r4blocked', timeout=5))
+    check('t16 conversation fed into the plan prompt',
+          any(r.get('step') and r.get('has_conversation') for r in records), str(records[-2:]))
+
+    h.send_text('Dec 24 please')
+    resumed = h.wait_agent_resumed(goal_fragment='Follow-up from the user: Dec 24 please')
+    check('t16 next message resumes (task = union of messages)',
+          resumed.get('status') in ('running', 'finished'), str(resumed.get('goal'))[:160])
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t16 resumed run finishes via status done', 'R4BLOCKED COMPLETE' in narration,
+          narration[-300:])
+    check('t16 resume message saved to chat history',
+          any(m.get('role') == 'user' and m.get('text') == 'Dec 24 please'
+              for m in h.chat_history()), str(h.chat_history()[-2:]))
+    check('t16 status-done run finished cleanly', 'Error' not in narration, narration[-200:])
+    h.disable_act()
+
+    # --- idle steps: two tolerated, third aborts ---
+    h.set_settings(model='r4idle')
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.enable_act()
+    h.clear_agent_state()
+    goal2 = 'Idle then finish'
+    h.send_text(goal2)
+    h.wait_agent_started(goal2)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t16 two idle steps tolerated', 'Error' not in narration, narration[-300:])
+    check('t16 idle run finishes via status done', 'R4IDLE DONE' in narration, narration[-300:])
+
+    h.set_settings(model='r4stall')
+    h.clear_agent_state()
+    goal3 = 'Never acts'
+    h.send_text(goal3)
+    h.wait_agent_started(goal3)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t16 third consecutive idle step aborts',
+          'no actions 3 steps in a row' in narration, narration[-300:])
+    h.disable_act()
+
+    # --- step cap: pause + continue (bare "continue" does not pollute the goal) ---
+    h.set_settings(model='r4slow')
+    h.clear_agent_state()
+    goal4 = 'Grind forever'
+    h.enable_act()
+    h.send_text(goal4)
+    h.wait_agent_started(goal4)
+    state = h.wait_agent_paused(timeout=90)
+    check('t16 step cap pauses instead of terminating',
+          state.get('status') == 'paused' and state.get('pausedReason') == 'steplimit',
+          str({k: state.get(k) for k in ('status', 'pausedReason', 'step')}))
+    check('t16 step-cap question asks to continue',
+          'continue' in (state.get('pauseQuestion') or ''), str(state.get('pauseQuestion')))
+    h.set_settings(model='r4done')
+    h.send_text('continue')
+    h.wait_agent_resumed()
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t16 continue resumes with an extended budget',
+          'R4CAP DONE' in narration and (state.get('maxSteps') or 0) > 12,
+          f'maxSteps={state.get("maxSteps")} narration={narration[-200:]}')
+    check('t16 bare "continue" not appended to the goal',
+          'Follow-up' not in state.get('goal', ''), state.get('goal'))
+    h.disable_act()
+
+    # --- per-step op cap: 11 ops -> 8 run, 3 reported as dropped ---
+    h.set_settings(model='r4cap')
+    urllib.request.urlopen(MOCK_DEBUG + '/debug/reset', timeout=5).read()
+    h.clear_agent_state()
+    goal5 = 'Overload one step'
+    h.enable_act()
+    h.send_text(goal5)
+    h.wait_agent_started(goal5)
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t16 ops beyond the per-step cap are dropped and reported',
+          'beyond the 8-per-step cap' in narration and 'dropped 3 action(s)' in narration,
+          narration[-400:])
+    check('t16 op-cap run finished via status done', 'R4CAP COMPLETE' in narration,
+          narration[-300:])
     h.disable_act()
 
 
