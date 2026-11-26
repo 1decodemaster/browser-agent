@@ -50,7 +50,7 @@
     `resumeAgent` appends it to the goal (`Follow-up from the user: …` — a bare "continue"
     after a step-cap pause does not pollute the goal), persists it to chat history, and
     re-spawns `runLoop`. Step-cap resumes reset `step` and extend the budget
-    (`maxSteps += 12`); blocked resumes keep it.
+    (`maxSteps += configured cap`, default 15, settable 1–100 in Options); blocked resumes keep it.
   - **Step cap pauses instead of terminating**: hitting the step limit sets
     `pausedReason: steplimit` with a "reply continue" question instead of ending the run.
   - **Idle tolerance**: up to 2 consecutive no-action steps are tolerated (with a WARNING

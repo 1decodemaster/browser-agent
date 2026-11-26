@@ -17,7 +17,8 @@ import type { ChatMessage, ChatPortMessage, Settings } from '@/shared/types';
 import { getTabPort } from './chat';
 
 const agentKey = (tabId: number) => `session:agent:${tabId}` as const;
-const MAX_STEPS = 12;
+const DEFAULT_MAX_TURNS = 15;
+const MAX_TURNS_UPPER_BOUND = 100;
 const MAX_OPS_PER_STEP = 8;
 const IDLE_STEP_TOLERANCE = 2;
 const OBSERVE_TIMEOUT_MS = 15_000;
@@ -40,6 +41,14 @@ interface AgentState {
 type AgentEffort = 'low' | 'medium' | 'high' | 'off' | 'default';
 const EFFORT_VALUES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'off', 'default']);
 const MEMORY_MAX_CHARS = 1200;
+
+function configuredMaxTurns(settings: Settings): number {
+  const raw = settings.actMaxTurns;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= MAX_TURNS_UPPER_BOUND) {
+    return raw;
+  }
+  return DEFAULT_MAX_TURNS;
+}
 
 interface RunHandle {
   stop: boolean;
@@ -170,7 +179,8 @@ export async function resumeAgent(tabId: number, text: string): Promise<void> {
     await saveHistory(tabId, history);
   }
   if (state.pausedReason === 'steplimit') {
-    state.maxSteps = (state.maxSteps ?? MAX_STEPS) + MAX_STEPS;
+    const cap = configuredMaxTurns(await getSettings());
+    state.maxSteps = (state.maxSteps ?? cap) + cap;
     state.step = 0;
   }
   state.pausedReason = undefined;
@@ -224,6 +234,8 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   const loopSettings = await getSettings();
   const memoryEnabled = loopSettings.agentWorkingMemory === true;
   const visionEnabled = loopSettings.actVision === true;
+  const maxTurns = state.maxSteps ?? configuredMaxTurns(loopSettings);
+  state.maxSteps = maxTurns;
   acquireKeepalive();
   let summary: string | undefined;
   let error: string | undefined;
@@ -234,7 +246,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
   let lastPrimaryTarget: number | null = null;
   let repeatCount = 0;
   try {
-    while (state.step < (state.maxSteps ?? MAX_STEPS)) {
+    while (state.step < maxTurns) {
       if (run.stop) {
         summary = 'Stopped by user.';
         break;
@@ -428,9 +440,9 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
 
       await delay(observations.some((entry) => entry.navigating) ? 800 : 400);
     }
-    if (!summary && !error && !pausedReason && state.step >= (state.maxSteps ?? MAX_STEPS)) {
+    if (!summary && !error && !pausedReason && state.step >= maxTurns) {
       pausedReason = 'steplimit';
-      pauseQuestion = `I used all ${state.maxSteps ?? MAX_STEPS} steps without reaching the goal - reply "continue" and I will pick up where I left off.`;
+      pauseQuestion = `I used all ${maxTurns} steps without reaching the goal - reply "continue" and I will pick up where I left off.`;
     }
   } catch (loopError) {
     if (run.stop || isAbortError(loopError)) summary = 'Stopped by user.';
@@ -668,7 +680,7 @@ async function completeOnce(
     .join('\n');
   const userContent = [
     `Goal: ${state.goal}`,
-    `Step ${state.step} of ${state.maxSteps ?? MAX_STEPS}`,
+    `Step ${state.step} of ${state.maxSteps ?? configuredMaxTurns(settings)}`,
     `Page: ${observation.title} (${observation.url})`,
     ...memorySection,
     conversation

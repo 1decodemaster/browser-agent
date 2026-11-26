@@ -9,6 +9,7 @@ const actEndpointInput = document.getElementById('actEndpointUrl') as HTMLInputE
 const actModelInput = document.getElementById('actModel') as HTMLInputElement;
 const actEffortSelect = document.getElementById('actReasoningEffort') as HTMLSelectElement;
 const actExtraInput = document.getElementById('actExtraInstructions') as HTMLTextAreaElement;
+const actMaxTurnsInput = document.getElementById('actMaxTurns') as HTMLInputElement;
 const sttEndpointInput = document.getElementById('sttEndpointUrl') as HTMLInputElement;
 const sttModelInput = document.getElementById('sttModel') as HTMLInputElement;
 const ttsEndpointInput = document.getElementById('ttsEndpointUrl') as HTMLInputElement;
@@ -53,6 +54,7 @@ async function load(): Promise<void> {
   actModelInput.value = settings.actModel ?? '';
   actEffortSelect.value = settings.actReasoningEffort ?? '';
   actExtraInput.value = settings.actExtraInstructions ?? '';
+  actMaxTurnsInput.value = settings.actMaxTurns != null ? String(settings.actMaxTurns) : '';
   sttEndpointInput.value = settings.sttEndpointUrl ?? '';
   sttModelInput.value = settings.sttModel ?? '';
   ttsEndpointInput.value = settings.ttsEndpointUrl ?? '';
@@ -79,6 +81,7 @@ async function collect(): Promise<Settings> {
     actModel: actModelInput.value.trim(),
     actReasoningEffort: actEffortSelect.value,
     actExtraInstructions: actExtraInput.value,
+    actMaxTurns: parseMaxTurns(actMaxTurnsInput.value),
     sttEndpointUrl: sttEndpointInput.value.trim(),
     sttModel: sttModelInput.value.trim(),
     ttsEndpointUrl: ttsEndpointInput.value.trim(),
@@ -95,6 +98,11 @@ async function collect(): Promise<Settings> {
 function parseTimeout(raw: string): number | undefined {
   const value = Number.parseInt(raw.trim(), 10);
   return Number.isFinite(value) && value >= 1000 ? value : undefined;
+}
+
+function parseMaxTurns(raw: string): number | undefined {
+  const value = Number.parseInt(raw.trim(), 10);
+  return Number.isInteger(value) && value >= 1 && value <= 100 ? value : undefined;
 }
 
 async function save(): Promise<void> {

@@ -60,7 +60,8 @@ You (panel)                 Background SW (agent.ts)              Page (content 
 
 3. **Think** — `completeOnce` assembles: system prompt (`agentSystem`: base rules; v2 schema +
    memory/effort rules only when `agentWorkingMemory` is on), goal, step N of the step budget
-   (`state.maxSteps`, default 12), page title/URL, working notes, the tab's last ~10 chat
+   (`state.maxSteps`, default 15; set via Options "Max turns per run", any integer 1–100),
+   page title/URL, working notes, the tab's last ~10 chat
    messages (`Conversation with the user …`, oldest first, so a resumed/blocked run sees its own
    question and answer), element index, last-6 narration lines, feedback (stuck + idle warnings
    ride here). `effortExtraBody` maps the
@@ -120,7 +121,7 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    `agent.resume` → `resumeAgent`: the goal grows by the follow-up (`Follow-up from the user: …`),
    the message is saved to chat history, and the run continues (the plan prompt now sees the
    whole conversation). A step-limit pause (`pausedReason:'steplimit'`) resumes on "continue"
-   with `step` reset and `maxSteps += 12`; a bare "continue" never touches the goal. Two idle
+   with `step` reset and `maxSteps += configured cap`; a bare "continue" never touches the goal. Two idle
    steps (no actions, `status:"continue"`) are tolerated with a WARNING into the next plan, the
    third aborts. A finished run's `deliverAnswer` (runs *after* the run slot is released, with
    its own keepalive): `synthesizeAnswer` sends a trimmed transcript (~6k chars) + working notes

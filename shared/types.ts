@@ -10,6 +10,7 @@ export interface Settings {
   actReasoningEffort?: string;
   actExtraInstructions?: string;
   actVision?: boolean;
+  actMaxTurns?: number;
   llmFirstTokenTimeoutMs?: number;
   llmTotalTimeoutMs?: number;
   agentWorkingMemory?: boolean;

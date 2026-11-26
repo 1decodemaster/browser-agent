@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: Settings = {
   actReasoningEffort: '',
   actExtraInstructions: '',
   actVision: false,
+  actMaxTurns: 15,
   sttEndpointUrl: '',
   sttModel: '',
   ttsAutoRead: false,

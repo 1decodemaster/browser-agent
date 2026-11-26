@@ -213,6 +213,14 @@
           </select>
         </label>
         <label>
+          Max turns per run
+          <input id="actMaxTurns" type="number" min="1" max="100" step="1" placeholder="15 (default)" />
+        </label>
+        <p class="note">
+          How many steps the agent may take before it pauses and asks to continue. Any integer from 1 to 100;
+          leave empty for the default (15).
+        </p>
+        <label>
           Extra instructions for the agent
           <textarea id="actExtraInstructions" rows="3" placeholder="Appended to the agent system prompt"></textarea>
         </label>

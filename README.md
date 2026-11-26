@@ -22,8 +22,8 @@ third-party service.
   browser's built-in speech recognition; Firefox can use any OpenAI-compatible whisper-style
   STT server). Assistant replies get a ▶ read-aloud button, with an optional auto-read toggle.
 - **Act mode** — the model indexes the page into a numbered element table, shows Spotlight
-  highlights as it works, and runs an autonomous Observe → Think → Act loop (up to 12 steps)
-  toward a goal you type into the composer.
+  highlights as it works, and runs an autonomous Observe → Think → Act loop (15 turns by default,
+  configurable up to 100 in Options) toward a goal you type into the composer.
 - **Per-tab history** — each tab keeps its own chat, cleared when the tab closes. Export any
   conversation as Markdown.
 
