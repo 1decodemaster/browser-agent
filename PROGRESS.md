@@ -6,7 +6,45 @@
 
 ## Current status
 
-- **Extension version:** 0.15.2 (staged TTS prefetch + auto-read stop button). A4 next.
+- **Extension version:** 0.16.0 (**R1 — correctness + id stability done**; **R2 next**).
+- **v0.16.0 — R1 correctness + id stability** (from the ADR-0007 reference):
+  - **`key` op un-dead**: prompt advertised it and `runAction` implemented it, but `KNOWN_OPS`
+    omitted it → `coerceAction` silently dropped every key action (the ADR's "ops live in three
+    places" failure; a `select` on a native `<select>` was therefore doubly impossible). Added to
+    the set. Permanent log line `[agent] tab=N ops=[...]` now shows the parsed plan ops.
+  - **Destructive mode now confirms submissions** (reverses the v0.8.2 decision): `needsConfirm`
+    honors `submit:true` (any type+submit asks in Auto), and HIGH_RISK gains `submit|send` to
+    match the reference list (…submit, send). Read-only ops still never ask.
+  - **Persistent element ids** (reference 0.2.1): ids now survive re-observation — module-level
+    `WeakMap<Element,id>` + global counter in `indexer.ts`; `ElementTable.members` keeps
+    per-table membership so `idFor` never leaks ids of elements absent from *this* table. Ids in
+    the narration and across steps point at the same node; the stuck-detection primary-target
+    comparison is now meaningful. (Per content-script world: ids restart after a real
+    navigation, which is correct — the table is gone with the document.)
+  - **Post-action settle**: the loop waits 800 ms after a navigating batch / 400 ms otherwise
+    before re-observing (the ADR's settle rule); `ActionObservation.navigating` carries the flag
+    from `executeActions` (navigate op, Navigation API, link click) and from the agent-side
+    channel-lost fallback. Previously only *empty* indexes triggered re-observation, so
+    half-rendered pages passed the ≥20-char gate.
+  - **The T9/T13 production bug** (new, found by the new gate): after a mid-run navigation the
+    new document remounts the spotlight with Act mode OFF (`display:none` overlay) — a pending
+    confirm bar rendered invisible/0-sized/unclickable and **hung the run forever**. Fixes:
+    `awaitConfirm()` activates the overlay root while a confirmation is pending; a pending
+    confirm is auto-cancelled on `pagehide` (+ the batch's `crossDocumentNavStarted` latch);
+    `mountAct` clears a stale `__ba_confirm` hook entry from a previous document.
+  - **Test hooks**: the confirm bar publishes its button's viewport center to
+    `sessionStorage['__ba_confirm']` while pending (the closed shadow DOM is otherwise
+    unreachable; same channel as the panel's `__ba_ui`) and focuses Confirm (Enter = confirm
+    for real users). Harness `drain_confirms()` auto-clicks pending confirms inside
+    `wait_agent_finished` (unattended runs pass the destructive gate like an approving user).
+  - **E2E harness fix** (was silently testing stale code): Chrome's persistent profile caches
+    the unpacked extension's *service-worker script* across launches — background changes ran
+    old code while content scripts updated. `Harness.__init__` now wipes the profile. This is
+    why R1's fixes appeared not to work for a while — worth remembering.
+  - **New tests T12/T13** + `keytest` mock model (key+done reply): key op survives parse+execute;
+    chip-inducing batch keeps the *same* Search-button id across observations (id persistence);
+    destructive mode blocks type+submit behind a confirm, the bar is frontmost and clickable
+    with Act mode OFF, submit does not commit before confirmation and does after. Suite 83/83.
 - **v0.15.2 — TTS pipeline fixes from real uvicorn/Kokoro testing**:
   - **Speech started only after ALL chunk responses**: the initial prefetch fired 3 concurrent
     requests; servers that queue/batch concurrent requests (uvicorn workers, GPU locks) respond
@@ -328,8 +366,67 @@
   OpenAI-compatible `/v1/audio/transcriptions` fallback via background RPC), per-message TTS
   play button + auto-read toggle.
 
+## Agent resilience (R) phases — adopted 2026-11-25 from the ADR-0007 reference design
+
+> Goal: a resilient loop on general pages. Design stance (adopted from the reference): every fix is a
+> perception or reasoning capability, never a site-specific rule — when a page defeats the agent, ask
+> "what could the model not see or not do?" and add that capability generically.
+
+- [x] **R1 — Correctness + id stability** (v0.16.0 — done as described in Current status)
+  - `key` op is dead: prompt advertises it (agent.ts AGENT_SYSTEM_LINES), `runAction` implements it,
+    but `KNOWN_OPS` omits it → `coerceAction` silently drops every key action (the ADR's "ops live in
+    three places" failure). Add it.
+  - Auto mode can submit unconfirmed: `needsConfirm` ignores `submit:true` (deliberate in v0.8.2 —
+    reversed per reference: destructive mode must confirm any type+submit). Add `submit|send` to
+    HIGH_RISK (reference list: …submit, send).
+  - Persistent element ids: ids restart at 1 every observe (`buildElementTable` fresh counter);
+    narration ids point at different elements across steps. Reuse an id across observations while the
+    element lives (module-level WeakMap + counter); new elements get the next id. Reference 0.2.1.
+  - Post-action settle before re-observe: 800 ms after a navigating op, 400 ms otherwise (today only
+    *empty* indexes are retried, so half-rendered pages pass the ≥20-char gate). `navigating` flag
+    propagates on ActionObservation from executeActions.
+- [ ] **R2 — Perception fidelity (state + names + budget)**
+  - Live state on index lines: `= "value"`, `[checked]`, `[disabled]`, `[expanded]`, combobox selected
+    option + capped option list. The system prompt already says "check whether the index already shows
+    the desired state" — but the index shows no state (ADR 0.3.0: the model cannot act on a dependent
+    field it cannot see).
+  - Screen-reader name order: aria-label → alt → placeholder → label[for] → wrapping label (minus
+    control text) → name/title → aria-labelledby → innerText. Drop value-as-name (identity != state).
+    Contextual naming for still-unnamed controls: nearest row/cell-ish container text ≤ 200 chars,
+    prefixed by the closest short text neighbour when it adds position.
+  - `cursor:pointer` indexing only where the pointer *starts*: skip elements whose pointer is inherited
+    from an already-interactive/pointer ancestor (today every child of a clickable row ≤400 chars eats
+    the interactive budget).
+  - Serialization order: fresh → in-viewport → DOM order; budgets 150 interactive / 320 total; trailer
+    tells the model to use `find`. `extract` on a field reports its value / checked state.
+- [ ] **R3 — Reasoning ops: select / find / inspect / focus**
+  - `select {target, value}`: option matched by text or value, native value setter + input/change,
+    reports `selected "X"` — native `<select>` is un-actuable today (synthetic click opens the OS
+    dropdown nothing can resolve; the key-op workaround was dead via the KNOWN_OPS bug).
+  - `find {text}`: match indexed elements by name/state/text; else any visible element whose own text
+    matches — plain spans/divs are added to the table on the fly so they get ids; each non-interactive
+    hit lists the interactive controls in its nearest container ("find the row" → its checkbox/button).
+    The model never has to scroll blindly to discover an id.
+  - `inspect {target}`: text/state, ordinal position among same-kind siblings, the text immediately
+    before/after, ancestors' text, and the controls in the same container.
+  - `focus`. Every op added in three places: protocol.ts, KNOWN_OPS + prompt doc line, runAction.
+- [ ] **R4 — Loop control + conversation**
+  - Plan schema gains `status: continue|done|blocked` + `summary`; `blocked` pauses the run and
+    surfaces the question; the user's next message resumes it (task = union of the messages).
+  - Step cap pauses with "continue" instead of terminating; tolerate two idle steps (no ops,
+    continue) instead of a hard error; raise per-step ops to ≤8 keeping navigation/submission/menu-open
+    last.
+  - Feed the tab's last ~10 conversation messages into the plan prompt (getHistory already exists).
+- [ ] **R5 — Screenshot last resort** (needs a vision-model channel; deferred)
+
+Keep our wins the reference lacks: stuck/repeat detection, working memory + self-managed effort,
+post-submit readback, batch stop-and-report on navigation.
+
 ## Decisions log
 
+- R1 (v0.16.0) reverses the v0.8.2 decision "`submit:true` no longer forces a prompt": per the
+  reference design, destructive/Auto mode confirms any type+submit and any name matching
+  submit/send. Auto mode keeps the submission rail; read-only ops never ask.
 - Act mode captures clicks while active (explicit mode; Vimium-visual-style). Esc unpins, Esc
   again exits. Panel Escape handler is disabled while Act mode is on.
 - Clicks inside the extension's own closed shadow roots are ignored by the pin logic (retargeted
@@ -352,3 +449,7 @@
   for npm/wxt commands on this machine.
 - Verify with: `npm run build` + `npm run build:firefox` + `npm run compile`, ship zip via
   `npm run zip` (`.output/browser-agent-<ver>-chrome.zip`).
+- Chrome profile caching gotcha: a persistent profile caches the unpacked extension's
+  service-worker script across launches — background changes need a manifest version bump or a
+  profile wipe (`tests/e2e.py` wipes automatically now). Manual smoke tests of SW changes should
+  use a fresh `--user-data-dir`.

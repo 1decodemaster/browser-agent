@@ -30,6 +30,15 @@ export function mountAct(css: string): void {
   spotlight = mountSpotlight(css);
   loadActUi();
   watchNavigation();
+  try {
+    window.sessionStorage.removeItem('__ba_confirm');
+  } catch {
+    /* a pending confirm cannot outlive its document */
+  }
+  window.addEventListener('pagehide', () => {
+    crossDocumentNavStarted = true;
+    spotlight?.cancelPendingConfirm();
+  });
 }
 
 export function isAskFirst(): boolean {
@@ -100,7 +109,7 @@ export function observePage(): { index: string; url: string; title: string } {
 }
 
 const HIGH_RISK_PATTERN =
-  /delete|remove|pay|purchase|checkout|buy|sign ?out|log ?out|place order|trash|empty/i;
+  /delete|remove|pay|purchase|checkout|buy|sign ?out|log ?out|place order|trash|empty|submit|send/i;
 
 export async function executeActions(
   actions: ActionOp[],
@@ -122,6 +131,7 @@ export async function executeActions(
       await abortableDelay(40);
       navigating = crossDocumentNavStarted;
     }
+    if (navigating) observation.navigating = true;
     if (navigating && index < actions.length - 1) {
       for (const skipped of actions.slice(index + 1)) {
         observations.push({
@@ -172,7 +182,7 @@ async function runAction(
         const resolved = resolve(action.target, current);
         if (!resolved) return { ...base, ok: false, message: `no live element [${action.target}]` };
         if (needsConfirm(confirmMode, resolved.info, false)) {
-          const ok = await sp.confirmBar(
+          const ok = await awaitConfirm(
             resolved.element.getBoundingClientRect(),
             `Click "${resolved.info.name || resolved.info.role}"?`,
           );
@@ -218,7 +228,7 @@ async function runAction(
           if (editable.readOnly) return { ...base, ok: false, message: 'field is read-only' };
         }
         if (needsConfirm(confirmMode, resolved.info, action.submit === true)) {
-          const ok = await sp.confirmBar(
+          const ok = await awaitConfirm(
             editable.getBoundingClientRect(),
             action.submit
               ? `Fill and submit "${resolved.info.name || resolved.info.role}"?`
@@ -314,6 +324,20 @@ async function runAction(
   }
 }
 
+// The spotlight root is display:none outside Act mode; a confirmation (agent runs survive
+// navigations that turn Act off) must make the overlay visible or the bar is unclickable
+// and the run hangs forever on the await.
+async function awaitConfirm(rect: DOMRect, text: string): Promise<boolean> {
+  const sp = spotlight;
+  if (!sp) return false;
+  sp.setActive(true);
+  try {
+    return await sp.confirmBar(rect, text);
+  } finally {
+    sp.setActive(active);
+  }
+}
+
 function resolve(
   id: number,
   current: ElementTable,
@@ -331,11 +355,11 @@ function isHighRisk(name: string): boolean {
 function needsConfirm(
   confirmMode: ConfirmMode,
   info: { name: string; role: string },
-  _submit: boolean,
+  submit: boolean,
 ): boolean {
   if (confirmMode === 'never') return false;
   if (confirmMode === 'always') return true;
-  return isHighRisk(info.name);
+  return submit || isHighRisk(info.name);
 }
 
 function submitForm(element: HTMLElement): void {

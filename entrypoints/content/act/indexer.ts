@@ -34,12 +34,16 @@ const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template', 'svg', 'ca
 const HOST_IDS = new Set(['browser-agent-root', 'browser-agent-act-root']);
 const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 
+// Ids are persistent across observations while an element lives: the same node keeps the same
+// id in every table, so ids in the narration and in find results stay meaningful to the model.
+const persistentIds = new WeakMap<Element, number>();
+let idCounter = 1;
+
 export class ElementTable {
   readonly info = new Map<number, ElementInfo>();
   readonly elements = new Map<number, Element>();
-  private readonly idsByElement = new WeakMap<Element, number>();
+  private readonly members = new WeakMap<Element, number>();
   readonly order: number[] = [];
-  private nextId = 1;
 
   add(
     element: Element,
@@ -48,7 +52,11 @@ export class ElementTable {
     name: string,
     fresh = false,
   ): number {
-    const id = this.nextId++;
+    let id = persistentIds.get(element);
+    if (id === undefined) {
+      id = idCounter++;
+      persistentIds.set(element, id);
+    }
     const role = implicitRole(element, tag);
     this.info.set(id, {
       id,
@@ -60,7 +68,7 @@ export class ElementTable {
       ...(fresh ? { fresh: true } : {}),
     });
     this.elements.set(id, element);
-    this.idsByElement.set(element, id);
+    this.members.set(element, id);
     this.order.push(id);
     return id;
   }
@@ -73,7 +81,7 @@ export class ElementTable {
   }
 
   idFor(element: Element): number | undefined {
-    return this.idsByElement.get(element);
+    return this.members.get(element);
   }
 }
 

@@ -16,6 +16,7 @@ export interface Spotlight {
   showActionBar(rect: DOMRect, actions: ActionItem[]): void;
   showFillBar(rect: DOMRect, onSubmit: (value: string) => void, onCancel: () => void): void;
   confirmBar(rect: DOMRect, text: string): Promise<boolean>;
+  cancelPendingConfirm(): void;
   hideBar(): void;
 }
 
@@ -47,6 +48,7 @@ export function mountSpotlight(css: string): Spotlight {
   (document.body ?? document.documentElement).append(host);
 
   let barVisible = false;
+  let pendingConfirm: ((value: boolean) => void) | null = null;
 
   return {
     setActive(active) {
@@ -147,6 +149,10 @@ export function mountSpotlight(css: string): Spotlight {
       bar.replaceChildren();
     },
 
+    cancelPendingConfirm() {
+      pendingConfirm?.(false);
+    },
+
     confirmBar(rect, text) {
       return new Promise<boolean>((resolve) => {
         barVisible = true;
@@ -164,10 +170,17 @@ export function mountSpotlight(css: string): Spotlight {
         cancel.type = 'button';
         cancel.textContent = 'Cancel';
         const finish = (value: boolean) => {
+          pendingConfirm = null;
+          try {
+            window.sessionStorage.removeItem('__ba_confirm');
+          } catch {
+            /* hook is best-effort */
+          }
           bar.classList.remove('baa-confirm');
           bar.replaceChildren();
           resolve(value);
         };
+        pendingConfirm = finish;
         confirm.addEventListener('click', (event) => {
           event.stopPropagation();
           finish(true);
@@ -178,6 +191,16 @@ export function mountSpotlight(css: string): Spotlight {
         });
         bar.append(message, confirm, cancel);
         positionBar(rect);
+        confirm.focus();
+        try {
+          const box = confirm.getBoundingClientRect();
+          window.sessionStorage.setItem(
+            '__ba_confirm',
+            JSON.stringify({ x: box.left + box.width / 2, y: box.top + box.height / 2, text }),
+          );
+        } catch {
+          /* hook is best-effort */
+        }
       });
     },
   };

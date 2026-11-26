@@ -241,6 +241,7 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
           : `Model did not return valid actions: ${lastError}`;
         break;
       }
+      console.info(`[agent] tab=${tabId} ops=${JSON.stringify(parsed.actions.map((a) => a.op))}`);
       if (memoryEnabled) {
         if (typeof parsed.memory === 'string') {
           state.memory = parsed.memory.trim().slice(0, MEMORY_MAX_CHARS);
@@ -312,6 +313,8 @@ async function runLoop(tabId: number, run: RunHandle): Promise<void> {
       }
       lastUrl = observation.url;
       lastPrimaryTarget = primaryTarget;
+
+      await delay(observations.some((entry) => entry.navigating) ? 800 : 400);
     }
     if (!summary && !error && state.step >= MAX_STEPS) {
       summary = `Reached the step limit (${MAX_STEPS}).`;
@@ -472,7 +475,8 @@ async function executeOnContent(
     );
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
-    const message = /message channel closed|Receiving end does not exist/i.test(raw)
+    const navigated = /message channel closed|Receiving end does not exist/i.test(raw);
+    const message = navigated
       ? 'the page navigated or reloaded before the actions finished reporting - observe the new page state before retrying'
       : raw;
     return actions.map((action) => ({
@@ -480,6 +484,7 @@ async function executeOnContent(
       op: action.op,
       target: 'target' in action ? action.target : undefined,
       message,
+      ...(navigated ? { navigating: true } : {}),
     }));
   }
 }
@@ -578,7 +583,16 @@ function parseActionResponse(raw: string): {
   };
 }
 
-const KNOWN_OPS = new Set(['click', 'type', 'scroll', 'extract', 'navigate', 'wait', 'done']);
+const KNOWN_OPS = new Set([
+  'click',
+  'type',
+  'key',
+  'scroll',
+  'extract',
+  'navigate',
+  'wait',
+  'done',
+]);
 
 function coerceAction(candidate: unknown): ActionOp | null {
   if (typeof candidate !== 'object' || candidate === null) return null;

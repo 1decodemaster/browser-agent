@@ -1,6 +1,6 @@
 # Agent loop — how a run works
 
-> Reference for `v0.14.x`. Generated from the fix-branch code; line numbers drift, function
+> Reference for `v0.16.x`. Generated from the fix-branch code; line numbers drift, function
 > names are stable. The loop lives in `entrypoints/background/agent.ts`; the page side in
 > `entrypoints/content/act/`.
 
@@ -25,9 +25,10 @@ You (panel)                 Background SW (agent.ts)              Page (content 
     │                              │   │  coerceAction ──► validated ops
     │                              │   │ 3. ACT                        │
     │                              ├──act:execute (RPC)────────────────►│ executeActions
-    │                              │   │  ▲ observations[]              │   runAction → click/type/extract/
-    │                              │   │                                │   navigate/wait; submitForm
-    │                              │   │                                │   (Enter-first); batch stops on nav
+     │                              │   │  ▲ observations[]              │   runAction → click/type/key/
+     │                              │   │                                │   extract/navigate/wait; confirm
+     │                              │   │                                │   gate; submitForm (Enter-first);
+     │                              │   │                                │   batch stops on nav
     │                              │   │ 4. NARRATE + PUSH              │
     │  ◄── agent.step (port) ───────┤ notify (tabPorts)                  │
     │                              │   repeat until done / limit / stop │
@@ -45,7 +46,9 @@ You (panel)                 Background SW (agent.ts)              Page (content 
 2. **Observe** — `observeWithRetry` RPCs `act:observe` into the tab, retrying up to 15s
    (doubles as post-navigation readiness detection). Content side `act.ts` `observePage()`
    builds the element table (`indexer.ts` `buildElementTable(previous)`) — freshness is a diff
-   against the last *observed* table (new/visibility-toggled elements, sticky while present) —
+   against the last *observed* table (new/visibility-toggled elements, sticky while present);
+   element **ids persist across observations** while an element lives (module-level WeakMap +
+   counter), so ids referenced in earlier narration keep pointing at the same node —
    and serializes under the 280-entry budget with fresh interactive entries pinned at the top
    under a "Recently appeared" header (`serializeTable`).
 
@@ -63,12 +66,21 @@ You (panel)                 Background SW (agent.ts)              Page (content 
    readable error.
 
 5. **Act** — `executeOnContent` RPCs `act:execute` → `executeActions` runs ops sequentially
-   against the **pinned** table (ids in the prompt == ids at execute time). Batch semantics:
-   once an action starts a cross-document navigation (navigate op, anchor click, Navigation API
-   detection, type+submit), remaining actions are reported `skipped - the page is navigating`
-   and the response escapes before unload. `type` reports a post-submit readback (field value +
-   nearby chip text). `submitForm` dispatches Enter on the field first (autocomplete commit),
-   falling back to `form.requestSubmit`.
+   against the **pinned** table (ids in the prompt == ids at execute time). Confirmation:
+   `confirmMode = askFirst ? 'always' : 'destructive'`; destructive asks on HIGH_RISK names
+   (delete/remove/pay/purchase/checkout/buy/sign out/log out/place order/trash/empty/**submit**/
+   **send**) and on any `type` with `submit:true` (R1: Auto keeps the submit rail). The bar renders
+   via `awaitConfirm`, which flips the spotlight root visible even with Act mode off (a run that
+   survived a navigation gets an *unclickable invisible* bar otherwise → dead run), focuses Confirm
+   (Enter = yes), and publishes its center to `sessionStorage['__ba_confirm']` while pending (test
+   hook; closed shadow DOM is otherwise unreachable). A pending confirm resolves false on `pagehide`
+   (the document is going away). Batch semantics: once an action starts a cross-document navigation
+   (navigate op, anchor click, Navigation API detection, type+submit), remaining actions are
+   reported `skipped - the page is navigating` and the response escapes before unload. `type`
+   reports a post-submit readback (field value + nearby chip text). `submitForm` dispatches Enter on
+   the field first (autocomplete commit), falling back to `form.requestSubmit`. The loop then
+   settles before the next observe: 800 ms after a navigating batch, 400 ms otherwise
+   (`ActionObservation.navigating`, carried by the channel-lost fallback too).
 
 6. **Narrate + push** — observations are formatted into the narration (trimmed to 40 lines /
    16k chars), pushed over the panel port via `notify` (`agent.step`). A missing port is logged

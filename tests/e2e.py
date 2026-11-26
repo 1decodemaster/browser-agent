@@ -26,6 +26,7 @@ Scenarios:
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -99,6 +100,9 @@ def main():
 class Harness:
     def __init__(self, pw):
         self.pw = pw
+        # The profile caches the unpacked extension's service-worker script
+        # across launches (stale background code runs silently otherwise).
+        shutil.rmtree(USER_DATA, ignore_errors=True)
         self.context = pw.chromium.launch_persistent_context(
             USER_DATA,
             headless=False,
@@ -210,6 +214,18 @@ class Harness:
             f"active={self.page.evaluate('document.activeElement?.id || document.activeElement?.tagName')} "
             f"keys={diag.get('keys', [])[-8:]} inputs={diag.get('inputs')} clicks={diag.get('clicks')}")
 
+    def drain_confirms(self):
+        """Auto-click any pending on-page confirm bar (destructive-mode gate).
+
+        The spotlight publishes the confirm button's viewport center to
+        sessionStorage['__ba_confirm'] while a confirmation is pending."""
+        raw = self.page.evaluate("sessionStorage.getItem('__ba_confirm')")
+        if not raw:
+            return
+        pos = json.loads(raw)
+        self.page.mouse.click(pos['x'], pos['y'])
+        time.sleep(0.2)
+
     def wait_agent_finished(self, timeout=60):
         deadline = time.time() + timeout
         state = None
@@ -218,8 +234,10 @@ class Harness:
             if state and state.get('status') == 'finished':
                 time.sleep(0.5)  # let the error/answer notification land
                 return self.agent_state()
+            self.drain_confirms()
             time.sleep(0.3)
-        raise TimeoutError(f'agent did not finish: {state}')
+        logs = ' | '.join(getattr(self, 'sw_logs', [])[-6:])
+        raise TimeoutError(f'agent did not finish: {state}\nSW logs: {logs}')
 
     # -- panel UI (closed shadow DOM -> coordinate clicks) ---------------
     def enable_act(self):
@@ -272,6 +290,8 @@ def run_tests():
             t9_panel_reconnect(h)
             t10_endpoint_tts(h)
             t11_tts_pipeline(h)
+            t12_key_op_and_persistent_ids(h)
+            t13_destructive_submit_gate(h)
         finally:
             h.context.close()
 
@@ -738,6 +758,102 @@ def t4_timeouts(h):
 
     # restore defaults for subsequent manual use of the profile
     h.set_settings(model='scripted', llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+
+
+def id_of(index, needle):
+    for line in index.splitlines():
+        if needle in line and line.startswith('['):
+            return int(line.split(']')[0].strip('['))
+    return None
+
+
+def t12_key_op_and_persistent_ids(h):
+    print('\nT12: key op survives parse+execute; element ids persist across observations')
+    h.set_settings(model='keytest', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL)
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+
+    before = h.observe()['index']
+    origin_id = id_of(before, 'combobox "Origin"')
+    check('t12 origin field indexed', origin_id is not None)
+    h.rpc({'kind': 'act:execute', 'actions': [
+        {'op': 'type', 'target': origin_id, 'text': 'DEL'},
+        {'op': 'wait', 'ms': 400},
+        {'op': 'type', 'target': origin_id, 'text': 'DEL', 'submit': True},
+    ], 'confirmMode': 'never'})
+    time.sleep(0.6)
+    chip = h.page.evaluate("document.querySelector('#origin-group .chip')?.textContent || ''")
+    check('t12 chip created by batch', 'New Delhi (DEL)' in chip, repr(chip))
+    after = h.observe()['index']
+    sid_before = id_of(before, '"Search flights"')
+    sid_after = id_of(after, '"Search flights"')
+    check('t12 element id persists across observations',
+          sid_before is not None and sid_before == sid_after, f'{sid_before} vs {sid_after}')
+
+    # fresh page: the keytest model presses Enter in Origin via the key op, then done
+    h.page.goto(FIXTURE_URL + '?keytest=1')
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    h.enable_act()
+    h.clear_agent_state()
+    h.send_text('Press Enter in the origin field')
+    h.wait_agent_started('Press Enter in the origin field')
+    state = h.wait_agent_finished(timeout=60)
+    narration = '\n'.join(state.get('narration', []))
+    check('t12 key op executed', 'pressed Enter' in narration, narration[-300:])
+    check('t12 key op not dropped by parser', 'no valid actions' not in narration, narration[-300:])
+    check('t12 run finished with summary', 'KEYTEST COMPLETE' in narration, narration[-300:])
+    h.disable_act()
+
+
+def t13_destructive_submit_gate(h):
+    print('\nT13: destructive mode gates type+submit; confirm works with Act mode off')
+    h.set_settings(model='scripted', actReasoningEffort='', agentWorkingMemory=False,
+                   llmFirstTokenTimeoutMs=None, llmTotalTimeoutMs=None)
+    h.page.goto(FIXTURE_URL + '?gate=1')
+    h.page.wait_for_load_state('load')
+    h.wait_ready()
+    time.sleep(0.3)
+    index = h.observe()['index']
+    dest_id = id_of(index, 'combobox "Destination"')
+    check('t13 destination field indexed', dest_id is not None)
+
+    # fire type+wait+type-submit with confirmMode 'destructive' WITHOUT answering
+    h.sw.evaluate(
+        """async ([tabId, request]) => {
+             void chrome.tabs.sendMessage(tabId, {__rpc: true, request});
+           }""",
+        [h.tab_id, {'kind': 'act:execute', 'actions': [
+            {'op': 'type', 'target': dest_id, 'text': 'SFO'},
+            {'op': 'wait', 'ms': 400},
+            {'op': 'type', 'target': dest_id, 'text': 'SFO', 'submit': True},
+        ], 'confirmMode': 'destructive'}],
+    )
+    time.sleep(0.8)
+    marker_raw = h.page.evaluate("sessionStorage.getItem('__ba_confirm')")
+    check('t13 type+submit awaits confirmation', marker_raw is not None, str(marker_raw))
+    if marker_raw:
+        marker = json.loads(marker_raw)
+        check('t13 confirmation says fill-and-submit', 'Fill and submit' in marker['text'],
+              marker['text'])
+        at_host = h.page.evaluate(
+            "([x, y]) => document.elementFromPoint(x, y)?.id || ''", [marker['x'], marker['y']])
+        check('t13 confirm bar is frontmost with Act mode off',
+              at_host == 'browser-agent-act-root', at_host)
+    value = h.page.evaluate("document.querySelector('#dest-group input')?.value || ''")
+    chip = h.page.evaluate("document.querySelector('#dest-group .chip')?.textContent || ''")
+    check('t13 submit not committed before confirmation', not chip, f'{value!r} {chip!r}')
+
+    h.drain_confirms()
+    time.sleep(1.2)
+    chip2 = h.page.evaluate("document.querySelector('#dest-group .chip')?.textContent || ''")
+    check('t13 confirmation lets the batch through', 'San Francisco (SFO)' in chip2, repr(chip2))
+    check('t13 confirm marker cleared',
+          h.page.evaluate("sessionStorage.getItem('__ba_confirm')") is None)
 
 
 if __name__ == '__main__':

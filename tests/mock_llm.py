@@ -269,6 +269,26 @@ class Handler(BaseHTTPRequestHandler):
     def build_reply(self, payload, prompt, model):
         if model == 'memsched':
             return memsched_reply(payload, prompt)
+        if model == 'keytest':
+            if is_agent_step(prompt):
+                entries = re.findall(r'\[(\d+)\] ([a-z]+) "([^"]*)"', prompt)
+                target = None
+                for eid, role, name in entries:
+                    if role in ('combobox', 'textbox', 'searchbox') and 'Origin' in name:
+                        target = int(eid)
+                        break
+                actions = (
+                    [{'op': 'key', 'target': target, 'key': 'Enter'}]
+                    if target is not None
+                    else [{'op': 'wait', 'ms': 100}]
+                )
+                actions.append({'op': 'done', 'summary': 'KEYTEST COMPLETE'})
+                return json.dumps({
+                    'v': 1,
+                    'thought': 'press Enter in Origin (key op smoke test)',
+                    'actions': actions,
+                }), 'json'
+            return json.dumps({'answer': PLAIN_ANSWER}), 'plain'
         if is_agent_step(prompt):
             actions, thought = scripted_actions(prompt)
             return json.dumps({'v': 1, 'thought': thought, 'actions': actions}), 'json'

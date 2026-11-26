@@ -16,6 +16,7 @@ export interface ActionObservation {
   op: string;
   target?: number;
   message?: string;
+  navigating?: boolean;
 }
 
 export type ConfirmMode = 'always' | 'destructive' | 'never';
