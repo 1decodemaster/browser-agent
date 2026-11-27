@@ -1,5 +1,7 @@
 # Browser Agent
 
+![dobby?](assets/logo-generated-gemini.jpeg)
+
 A cross-browser (Chrome + Firefox) WebExtension that puts an LLM chat panel on every page. Ask
 questions about what you are looking at, attach screenshots, dictate with your voice — and flip
 on **Act mode** to let the model actually operate the page for you: it indexes the DOM, clicks,
